@@ -39,6 +39,10 @@ public class IlInkService {
             `v-clear`   - 清空会话
 
             *直接发送消息即可与 Claude 对话。*
+
+            ---
+            *Copyright 2026 ChengXun*
+            *GitHub: https://github.com/ChengXunX/vibe-wechat*
             """;
 
     @PostConstruct
