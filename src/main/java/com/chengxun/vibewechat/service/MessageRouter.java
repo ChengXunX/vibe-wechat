@@ -357,8 +357,84 @@ public class MessageRouter {
         }
 
         String path = parts[1];
-        claudeApiService.setInstallPath(path);
-        ilinkService.sendText(userId, "已设置 Claude 安装路径: " + path, contextToken);
+
+        // 检查是否是 install 命令
+        if (path.equals("install")) {
+            installClaude(userId, contextToken);
+            return;
+        }
+
+        // 检查路径是否存在
+        java.io.File file = new java.io.File(path);
+        if (file.exists()) {
+            claudeApiService.setInstallPath(path);
+            // 更新 Claude 配置文件
+            updateClaudeConfig(userId, path, contextToken);
+            ilinkService.sendText(userId, "已设置 Claude 安装路径: " + path + "\n配置已更新到 ~/.claude/settings.json", contextToken);
+        } else {
+            ilinkService.sendText(userId, "路径不存在: " + path + "\n\n是否安装 Claude？\n回复 v-claude install 进行安装", contextToken);
+        }
+    }
+
+    private void updateClaudeConfig(String userId, String installPath, String contextToken) {
+        try {
+            String configPath = System.getProperty("user.home") + "/.claude/settings.json";
+            java.io.File configFile = new java.io.File(configPath);
+
+            if (configFile.exists()) {
+                String content = new String(java.nio.file.Files.readAllBytes(configFile.toPath()));
+
+                // 更新 ANTHROPIC_BASE_URL
+                String apiUrl = claudeApiService.getApiUrl();
+                if (apiUrl != null && !apiUrl.isEmpty()) {
+                    if (content.contains("\"ANTHROPIC_BASE_URL\"")) {
+                        content = content.replaceAll("\"ANTHROPIC_BASE_URL\":\"[^\"]*\"", "\"ANTHROPIC_BASE_URL\":\"" + apiUrl + "\"");
+                    } else {
+                        content = content.replaceFirst("\\{", "{\"env\":{\"ANTHROPIC_BASE_URL\":\"" + apiUrl + "\",");
+                    }
+                }
+
+                // 更新 ANTHROPIC_AUTH_TOKEN
+                String apiKey = claudeApiService.getApiKey();
+                if (apiKey != null && !apiKey.isEmpty()) {
+                    if (content.contains("\"ANTHROPIC_AUTH_TOKEN\"")) {
+                        content = content.replaceAll("\"ANTHROPIC_AUTH_TOKEN\":\"[^\"]*\"", "\"ANTHROPIC_AUTH_TOKEN\":\"" + apiKey + "\"");
+                    } else if (content.contains("\"env\"")) {
+                        content = content.replaceFirst("\\{\"env\":\\{", "{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"" + apiKey + "\",");
+                    }
+                }
+
+                java.nio.file.Files.write(configFile.toPath(), content.getBytes());
+                ilinkService.sendText(userId, "Claude 配置已更新", contextToken);
+            } else {
+                ilinkService.sendText(userId, "Claude 配置文件不存在，已跳过", contextToken);
+            }
+        } catch (Exception e) {
+            ilinkService.sendText(userId, "更新配置失败: " + e.getMessage(), contextToken);
+        }
+    }
+
+    private void installClaude(String userId, String contextToken) {
+        ilinkService.sendText(userId, "正在安装 Claude，请稍候...", contextToken);
+
+        try {
+            // 使用 npm 安装 Claude
+            ProcessBuilder pb = new ProcessBuilder("npm", "install", "-g", "@anthropic-ai/claude-code");
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            String output = new String(process.getInputStream().readAllBytes());
+            int exitCode = process.waitFor();
+
+            if (exitCode == 0) {
+                claudeApiService.setInstallPath("/usr/bin/claude");
+                ilinkService.sendText(userId, "Claude 安装成功!\n路径: /usr/bin/claude", contextToken);
+            } else {
+                ilinkService.sendText(userId, "Claude 安装失败:\n" + output, contextToken);
+            }
+        } catch (Exception e) {
+            ilinkService.sendText(userId, "安装失败: " + e.getMessage(), contextToken);
+        }
     }
 
     private boolean checkMessageLimit(String userId) {
