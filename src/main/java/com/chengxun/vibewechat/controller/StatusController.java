@@ -25,10 +25,16 @@ public class StatusController {
     }
 
     @GetMapping("/qrcode")
-    public Map<String, String> qrcode() throws WriterException, IOException {
-        // TODO: 生成实际的 ilink 连接二维码
+    public String qrcode() throws WriterException, IOException {
         String qrContent = "https://ilink.example.com/connect";
         String qrBase64 = QRCodeGenerator.generateBase64(qrContent, 300, 300);
-        return Map.of("qrcode", "data:image/png;base64," + qrBase64);
+        String status = ilinkService.isConnected() ? "已连接" : "未连接";
+        return "<!DOCTYPE html>" +
+               "<html><head><meta charset=\"UTF-8\"><title>Vibe WeChat - QR Code</title>" +
+               "<style>body{font-family:Arial;text-align:center;padding:50px;}" +
+               "h1{color:#333;}img{border:2px solid #ccc;padding:10px;}p{color:#666;}</style></head>" +
+               "<body><h1>Vibe WeChat</h1><p>扫描二维码连接微信 ilink</p>" +
+               "<img src=\"data:image/png;base64," + qrBase64 + "\" alt=\"QR Code\">" +
+               "<p>服务状态: " + status + "</p></body></html>";
     }
 }
