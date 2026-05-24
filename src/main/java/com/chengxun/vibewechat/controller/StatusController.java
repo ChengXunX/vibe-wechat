@@ -72,11 +72,14 @@ public class StatusController {
             return "<!DOCTYPE html>" +
                    "<html><head><meta charset=\"UTF-8\"><title>Vibe WeChat - QR Code</title>" +
                    "<style>body{font-family:Arial;text-align:center;padding:50px;}" +
-                   "h1{color:#333;}img{border:2px solid #ccc;padding:10px;max-width:300px;}p{color:#666;}</style></head>" +
+                   "h1{color:#333;}img{border:2px solid #ccc;padding:10px;max-width:300px;}p{color:#666;}" +
+                   ".refresh{color:#0066cc;cursor:pointer;}</style>" +
+                   "<script>setTimeout(function(){location.reload();},30000);</script></head>" +
                    "<body><h1>Vibe WeChat</h1><p>扫描二维码连接微信 ilink</p>" +
                    "<img src=\"data:image/png;base64," + qrBase64 + "\" alt=\"QR Code\">" +
                    "<p>服务状态: " + status + "</p>" +
-                   "<p>QR Code Token: " + qrcode + "</p></body></html>";
+                   "<p>QR Code Token: " + qrcode + "</p>" +
+                   "<p class=\"refresh\">页面将在30秒后自动刷新</p></body></html>";
         } else {
             return "<!DOCTYPE html>" +
                    "<html><head><meta charset=\"UTF-8\"><title>Vibe WeChat - QR Code</title>" +
