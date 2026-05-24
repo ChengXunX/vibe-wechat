@@ -152,6 +152,7 @@ public class ClaudeApiService {
             command.add("--print");
             command.add("--output-format");
             command.add("stream-json");
+            command.add("--verbose");
             command.add("--dangerously-skip-permissions");
 
             // 添加模型配置（支持 [1m] 等配置）
