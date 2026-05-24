@@ -141,7 +141,11 @@ public class IlInkConnectionHandler {
 
             // 格式化 markdown 为纯文本
             String formattedText = formatMarkdown(text);
-            String escapedText = formattedText.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+            String escapedText = formattedText.replace("\\", "\\\\")
+                    .replace("\"", "\\\"")
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "\\t");
             String contextTokenStr = (contextToken != null && !contextToken.isEmpty()) ?
                 String.format(",\"context_token\":\"%s\"", contextToken) : "";
 
@@ -152,6 +156,8 @@ public class IlInkConnectionHandler {
                 contextTokenStr,
                 escapedText
             );
+
+            log.debug("Send message body: {}", jsonBody);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
