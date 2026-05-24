@@ -52,6 +52,7 @@ public class MessageRouter {
     private static final String V_TOKEN = "v-token";
     private static final String V_CLAUDE = "v-claude";
     private static final String V_CONFIG = "v-config";
+    private static final String V_CD = "v-cd";
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -107,6 +108,7 @@ public class MessageRouter {
             case V_TOKEN -> handleTokenCommand(userId, parts, contextToken);
             case V_CLAUDE -> handleClaudePathCommand(userId, parts, contextToken);
             case V_CONFIG -> handleConfigCommand(userId, parts, contextToken);
+            case V_CD -> handleCdCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -126,6 +128,9 @@ public class MessageRouter {
                 `v-key <key>`     设置 Claude API Key
                 `v-model <name>`  设置 Claude 模型（默认: claude-sonnet-4-20250514）
                 `v-claude <path>` 设置 Claude 安装路径
+
+                **工作目录**
+                `v-cd <path>`     切换工作目录
 
                 **快捷过滤**
                 `v-tools`         开关工具类消息（如grep、find等）
@@ -180,6 +185,11 @@ public class MessageRouter {
                 安装路径: `%s`
 
                 ════════════════════════
+                **工作目录**
+                ════════════════════════
+                `%s`
+
+                ════════════════════════
                 **消息过滤**
                 ════════════════════════
                 | 配置项 | 状态 |
@@ -209,6 +219,7 @@ public class MessageRouter {
                 maskedKey,
                 claudeApiService.getModel(),
                 claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
+                System.getProperty("user.dir"),
                 filterConfig.isShowToolCalls() ? on : off,
                 filterConfig.isShowFileRead() ? on : off,
                 filterConfig.isShowFileEdit() ? on : off,
@@ -449,6 +460,24 @@ public class MessageRouter {
             }
         } catch (Exception e) {
             ilinkService.sendText(userId, "安装失败: " + e.getMessage(), contextToken);
+        }
+    }
+
+    private void handleCdCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            String currentDir = System.getProperty("user.dir");
+            ilinkService.sendText(userId, "用法: v-cd <path>\n当前工作目录: " + currentDir, contextToken);
+            return;
+        }
+
+        String path = parts[1];
+        java.io.File dir = new java.io.File(path);
+
+        if (dir.exists() && dir.isDirectory()) {
+            System.setProperty("user.dir", dir.getAbsolutePath());
+            ilinkService.sendText(userId, "工作目录已切换到: " + dir.getAbsolutePath(), contextToken);
+        } else {
+            ilinkService.sendText(userId, "目录不存在: " + path, contextToken);
         }
     }
 

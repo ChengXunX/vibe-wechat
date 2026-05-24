@@ -78,6 +78,11 @@ v-config your-api-key claude-sonnet-4-20250514
 - `v-claude <path>` - 设置 Claude 安装路径
 - `v-claude install` - 自动安装 Claude
 
+**工作目录**
+- `v-cd <path>` - 切换 Claude 工作目录
+  - 示例：`v-cd /home/user/project`
+  - 查看当前目录：`v-cd`
+
 **消息过滤**
 - `v-tools` - 开关工具类消息（如 grep、find 等）
 - `v-fileread` - 开关读取文件类消息（如 Read、cat 等）
