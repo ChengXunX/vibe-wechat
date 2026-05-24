@@ -77,14 +77,13 @@ public class MessageRouter {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
                 int count = getMessageCount(userId);
-                int max = filterConfig.getMaxMessagesPerUser();
-                log.info("Tool callback: userId={}, toolName={}, count={}, max={}", userId, toolName, count, max);
+                log.info("Tool callback: userId={}, toolName={}, count={}, max={}", userId, toolName, count, MESSAGE_LIMIT);
 
                 // 达到第9条时，发送警告并停止后续通知
-                if (count >= max - 1) {
-                    if (count == max - 1) {
+                if (count >= MESSAGE_LIMIT - 1) {
+                    if (count == MESSAGE_LIMIT - 1) {
                         String contextToken = userContextTokens.get(userId);
-                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
+                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
                     }
                     return;
                 }
@@ -109,11 +108,11 @@ public class MessageRouter {
             @Override
             public void onToolResult(String userId, String result) {
                 int count = getMessageCount(userId);
-                int max = filterConfig.getMaxMessagesPerUser();
+                int max = MESSAGE_LIMIT;
 
                 // 达到第9条时，发送警告并停止后续通知
-                if (count >= max - 1) {
-                    if (count == max - 1) {
+                if (count >= MESSAGE_LIMIT - 1) {
+                    if (count == MESSAGE_LIMIT - 1) {
                         String contextToken = userContextTokens.get(userId);
                         ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
                     }
@@ -134,11 +133,11 @@ public class MessageRouter {
             @Override
             public void onSubtaskStatus(String userId, String status) {
                 int count = getMessageCount(userId);
-                int max = filterConfig.getMaxMessagesPerUser();
+                int max = MESSAGE_LIMIT;
 
                 // 达到第9条时，发送警告并停止后续通知
-                if (count >= max - 1) {
-                    if (count == max - 1) {
+                if (count >= MESSAGE_LIMIT - 1) {
+                    if (count == MESSAGE_LIMIT - 1) {
                         String contextToken = userContextTokens.get(userId);
                         ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
                     }
@@ -414,7 +413,7 @@ public class MessageRouter {
                 filterConfig.isShowTaskCompletion() ? on : off,
                 filterConfig.isShowTaskDuration() ? on : off,
                 filterConfig.isShowTokenUsage() ? on : off,
-                filterConfig.getMaxMessagesPerUser(),
+                MESSAGE_LIMIT,
                 claudeApiService.getTokenUsageSummary(userId));
         ilinkService.sendText(userId, status, contextToken);
     }
@@ -504,7 +503,7 @@ public class MessageRouter {
 
     private void handleLimitCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
-            ilinkService.sendText(userId, "用法: v-limit <数量>\n当前限制: " + filterConfig.getMaxMessagesPerUser(), contextToken);
+            ilinkService.sendText(userId, "用法: v-limit <数量>\n当前限制: " + MESSAGE_LIMIT, contextToken);
             return;
         }
 
@@ -922,6 +921,8 @@ public class MessageRouter {
 
     private final Map<String, Long> messageExpiry = new ConcurrentHashMap<>();
 
+    private static final int MESSAGE_LIMIT = 10;
+
     private boolean checkMessageLimit(String userId) {
         AtomicInteger count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0));
 
@@ -933,11 +934,10 @@ public class MessageRouter {
         }
 
         int currentCount = count.get();
-        int max = filterConfig.getMaxMessagesPerUser();
 
-        log.info("Message limit check: userId={}, count={}, max={}", userId, currentCount, max);
+        log.info("Message limit check: userId={}, count={}, max={}", userId, currentCount, MESSAGE_LIMIT);
 
-        if (currentCount >= max) {
+        if (currentCount >= MESSAGE_LIMIT) {
             log.info("Message limit reached for userId={}", userId);
             return false;
         }
@@ -954,7 +954,7 @@ public class MessageRouter {
     }
 
     private boolean isNearLimit(String userId) {
-        return getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser() - 1;
+        return getMessageCount(userId) >= MESSAGE_LIMIT - 1;
     }
 
     private String generateTaskSummary(String message) {
