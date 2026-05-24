@@ -42,7 +42,23 @@ start() {
     nohup java -jar "$JAR_FILE" > vibe-wechat.log 2>&1 &
     echo $! > "$PID_FILE"
     echo "服务已启动 (PID: $(cat $PID_FILE))"
-    echo "访问: http://localhost:$PORT/qrcode"
+
+    QR_URL="http://localhost:$PORT/qrcode"
+    echo "二维码页面: $QR_URL"
+
+    # 自动打开浏览器
+    sleep 2
+    if command -v xdg-open > /dev/null 2>&1; then
+        xdg-open "$QR_URL"
+    elif command -v open > /dev/null 2>&1; then
+        open "$QR_URL"
+    elif command -v google-chrome > /dev/null 2>&1; then
+        google-chrome "$QR_URL"
+    elif command -v firefox > /dev/null 2>&1; then
+        firefox "$QR_URL"
+    else
+        echo "请手动打开浏览器访问: $QR_URL"
+    fi
 }
 
 stop() {
