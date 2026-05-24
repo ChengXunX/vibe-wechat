@@ -30,6 +30,9 @@ public class MessageRouter {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
+    @Autowired
+    private ConfigService configService;
+
     private final Map<String, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -53,6 +56,8 @@ public class MessageRouter {
     private static final String V_CLAUDE = "v-claude";
     private static final String V_CONFIG = "v-config";
     private static final String V_CD = "v-cd";
+    private static final String V_BLOCK = "v-block";
+    private static final String V_UNBLOCK = "v-unblock";
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -109,58 +114,63 @@ public class MessageRouter {
             case V_CLAUDE -> handleClaudePathCommand(userId, parts, contextToken);
             case V_CONFIG -> handleConfigCommand(userId, parts, contextToken);
             case V_CD -> handleCdCommand(userId, parts, contextToken);
+            case V_BLOCK -> handleBlockCommand(userId, parts, contextToken);
+            case V_UNBLOCK -> handleUnblockCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
 
     private void showHelp(String userId, String contextToken) {
         String help = """
-                **vibe-wechat 命令列表**
+                **📋 vibe-wechat 命令列表**
 
-                *说明: 微信限制每条用户消息最多回复10次，可通过 v-limit 设置内部限制（默认不限制）*
+                *微信限制每条消息最多回复10次，可通过 v-limit 设置*
 
+                ━━━━━━━━━━━━━━━━━━━━━━
                 `v-help`          显示此帮助
                 `v-status`        显示当前配置状态
 
-                **Claude 配置**
-                `v-config <key> [model]` 一键配置 API Key 和模型
-                `v-api <url>`     设置 Claude API 地址（默认: api.anthropic.com）
-                `v-key <key>`     设置 Claude API Key
-                `v-model <name>`  设置 Claude 模型（默认: claude-sonnet-4-20250514）
-                `v-claude <path>` 设置 Claude 安装路径
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **🔧 Claude 配置**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                `v-config <key> [model]` 一键配置
+                `v-api <url>`     设置 API 地址
+                `v-key <key>`     设置 API Key
+                `v-model <name>`  设置模型
+                `v-claude <path>` 设置安装路径
 
-                **工作目录**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **📁 工作目录**
+                ━━━━━━━━━━━━━━━━━━━━━━
                 `v-cd <path>`     切换工作目录
 
-                **快捷过滤**
-                `v-tools`         开关工具类消息（如grep、find等）
-                `v-fileread`      开关读取文件类消息（如Read、cat等）
-                `v-fileedit`      开关编辑文件类消息（如Edit、Write等）
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **⚙️ 消息过滤**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                `v-tools`         开关工具类消息
+                `v-fileread`      开关读取文件消息
+                `v-fileedit`      开关编辑文件消息
+                `v-filter <key> <value>`  高级过滤
 
-                **高级过滤**
-                `v-filter <key> <value>`  配置消息过滤
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **🚫 关键词屏蔽**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                `v-block <词>`    添加屏蔽关键词
+                `v-unblock <词>`  移除屏蔽关键词
 
-                **消息配置**
-                `v-limit <n>`     设置每小时最大消息数（默认: 不限制）
-                `v-token`         查看/开关 token 消耗统计
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **📊 消息配置**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                `v-limit <n>`     每小时消息数
+                `v-token`         Token 使用统计
 
-                **会话管理**
-                `v-new`           新建 Claude 会话
-                `v-clear`         清空当前会话
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **💬 会话管理**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                `v-new`           新建会话
+                `v-clear`         清空会话
                 `v-sessions`      列出会话
                 `v-session <id>`  切换会话
-
-                **过滤配置项**
-                - tools       工具调用 (true/false)
-                - fileread    读取文件 (true/false)
-                - fileedit    编辑文件 (true/false)
-                - files       所有文件操作 (true/false)
-                - decisions   决策消息 (true/false)
-                - results     结果消息 (true/false)
-                - subtasks    子任务完成 (true/false)
-                - tasks       任务完成 (true/false)
-                - duration    任务耗时 (true/false)
-                - token       Token消耗 (true/false)
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
@@ -170,49 +180,47 @@ public class MessageRouter {
         String maskedKey = (apiKey != null && apiKey.length() > 8) ?
                 apiKey.substring(0, 4) + "****" + apiKey.substring(apiKey.length() - 4) : "未配置";
 
-        String on = "✅ 显示";
-        String off = "❌ 隐藏";
+        String on = "✅";
+        String off = "❌";
 
         String status = String.format("""
-                **当前配置状态**
+                **📋 当前配置状态**
 
-                ════════════════════════
-                **Claude 配置**
-                ════════════════════════
-                API地址: `%s`
-                API Key: `%s`
-                模型: `%s`
-                安装路径: `%s`
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **🔧 Claude 配置**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                API地址 %s
+                API Key %s
+                模型 %s
+                安装路径 %s
 
-                ════════════════════════
-                **工作目录**
-                ════════════════════════
-                `%s`
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **📁 工作目录**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                %s
 
-                ════════════════════════
-                **消息过滤**
-                ════════════════════════
-                | 配置项 | 状态 |
-                |--------|------|
-                | 工具调用 | %s |
-                | 读取文件 | %s |
-                | 编辑文件 | %s |
-                | 文件操作 | %s |
-                | 决策消息 | %s |
-                | 结果消息 | %s |
-                | 子任务 | %s |
-                | 任务完成 | %s |
-                | 耗时 | %s |
-                | Token统计 | %s |
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **⚙️ 消息过滤**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                工具调用 %s
+                读取文件 %s
+                编辑文件 %s
+                文件操作 %s
+                决策消息 %s
+                结果消息 %s
+                子任务 %s
+                任务完成 %s
+                耗时 %s
+                Token统计 %s
 
-                ════════════════════════
-                **限制**
-                ════════════════════════
-                每小时消息数: %d
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **📊 限制**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                每小时消息数 %d
 
-                ════════════════════════
-                **Token使用**
-                ════════════════════════
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **📈 Token使用**
+                ━━━━━━━━━━━━━━━━━━━━━━
                 %s
                 """,
                 claudeApiService.getApiUrl(),
@@ -463,6 +471,40 @@ public class MessageRouter {
         }
     }
 
+    private void handleBlockCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            java.util.List<String> keywords = filterConfig.getBlockedKeywords();
+            String list = keywords.isEmpty() ? "暂无屏蔽关键词" :
+                    "当前屏蔽关键词:\n" + String.join("\n", keywords.stream().map(k -> "- " + k).toList());
+            ilinkService.sendText(userId, "用法: v-block <关键词>\n\n" + list, contextToken);
+            return;
+        }
+
+        String keyword = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length));
+        if (!filterConfig.getBlockedKeywords().contains(keyword)) {
+            filterConfig.getBlockedKeywords().add(keyword);
+            configService.saveConfig();
+            ilinkService.sendText(userId, "已添加屏蔽关键词: " + keyword, contextToken);
+        } else {
+            ilinkService.sendText(userId, "该关键词已存在: " + keyword, contextToken);
+        }
+    }
+
+    private void handleUnblockCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-unblock <关键词>", contextToken);
+            return;
+        }
+
+        String keyword = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length));
+        if (filterConfig.getBlockedKeywords().remove(keyword)) {
+            configService.saveConfig();
+            ilinkService.sendText(userId, "已移除屏蔽关键词: " + keyword, contextToken);
+        } else {
+            ilinkService.sendText(userId, "未找到该关键词: " + keyword, contextToken);
+        }
+    }
+
     private void handleCdCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
             String currentDir = System.getProperty("user.dir");
@@ -539,6 +581,9 @@ public class MessageRouter {
 
         String maskedKey = apiKey.length() > 8 ?
                 apiKey.substring(0, 4) + "****" + apiKey.substring(apiKey.length() - 4) : apiKey;
+
+        // 保存配置到本地文件
+        configService.saveConfig();
 
         ilinkService.sendText(userId, "Claude 配置已更新:\n- API Key: " + maskedKey + "\n- 模型: " + model, contextToken);
     }

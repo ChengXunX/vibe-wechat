@@ -22,23 +22,23 @@ public class IlInkService {
     private final Set<String> connectedUsers = ConcurrentHashMap.newKeySet();
 
     private static final String WELCOME_MESSAGE = """
-            **欢迎使用 Vibe We Chat!**
+            **🎉 欢迎使用 Vibe We Chat!**
 
-            **常用命令:**
-            `v-help`    - 显示所有命令
-            `v-status`  - 查看当前配置
-            `v-api`     - 设置 Claude API 地址
-            `v-key`     - 设置 Claude API Key
-            `v-model`   - 设置 Claude 模型
-            `v-claude`  - 设置 Claude 安装路径
-            `v-tools`   - 开关工具类消息
-            `v-fileread` - 开关读取文件消息
-            `v-fileedit` - 开关编辑文件消息
-            `v-token`   - 查看 Token 使用
-            `v-new`     - 新建会话
-            `v-clear`   - 清空会话
+            ━━━━━━━━━━━━━━━━━━━━━━
+            **⚡ 快速开始**
+            ━━━━━━━━━━━━━━━━━━━━━━
+            发送 `v-config <API_KEY>` 一键配置
+            发送 `v-help` 查看所有命令
 
-            *直接发送消息即可与 Claude 对话。*
+            ━━━━━━━━━━━━━━━━━━━━━━
+            **🔧 常用命令**
+            ━━━━━━━━━━━━━━━━━━━━━━
+            `v-status`  查看配置
+            `v-cd`      切换目录
+            `v-block`   屏蔽关键词
+            `v-new`     新建会话
+
+            *直接发送消息即可与 Claude 对话*
 
             ---
             *Copyright 2026 ChengXun*

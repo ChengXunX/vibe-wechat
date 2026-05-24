@@ -217,7 +217,7 @@ public class ClaudeApiService {
     private String buildRequestBody(List<Map<String, String>> messages) {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"model\":\"").append(claudeConfig.getModel()).append("\",");
+        sb.append("\"model\":\"").append(escapeJson(claudeConfig.getModel())).append("\",");
         sb.append("\"max_tokens\":").append(claudeConfig.getMaxTokens()).append(",");
         sb.append("\"messages\":[");
         for (int i = 0; i < messages.size(); i++) {
