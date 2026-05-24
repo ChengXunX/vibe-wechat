@@ -50,21 +50,13 @@ public class StatusController {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        String qrBase64 = "";
         String qrcode = "";
         String rawResponse = response.body();
 
         if (response.statusCode() == 200 && rawResponse != null && !rawResponse.isEmpty()) {
-            // 解析响应获取二维码
-            // 提取 qrcode_img_content
-            int start = rawResponse.indexOf("\"qrcode_img_content\":\"") + 22;
-            int end = rawResponse.indexOf("\"", start);
-            if (start > 21 && end > start) {
-                qrBase64 = rawResponse.substring(start, end);
-            }
             // 提取 qrcode token
-            start = rawResponse.indexOf("\"qrcode\":\"") + 10;
-            end = rawResponse.indexOf("\"", start);
+            int start = rawResponse.indexOf("\"qrcode\":\"") + 10;
+            int end = rawResponse.indexOf("\"", start);
             if (start > 9 && end > start) {
                 qrcode = rawResponse.substring(start, end);
             }
@@ -72,28 +64,17 @@ public class StatusController {
 
         String status = ilinkService.isConnected() ? "已连接" : "未连接";
 
-        // 检查 qrcode_img_content 格式
-        String imgSrc = "";
-        if (!qrBase64.isEmpty()) {
-            if (qrBase64.startsWith("data:")) {
-                // 已经是 data URL
-                imgSrc = qrBase64;
-            } else if (qrBase64.startsWith("http")) {
-                // 是 URL，直接使用
-                imgSrc = qrBase64;
-            } else {
-                // 假设是 base64 数据，添加前缀
-                imgSrc = "data:image/png;base64," + qrBase64;
-            }
-        }
+        if (!qrcode.isEmpty()) {
+            // 使用 qrcode token 生成二维码图片
+            String qrImgUrl = "https://liteapp.weixin.qq.com/q/" + qrcode.substring(0, 6) + "?qrcode=" + qrcode + "&bot_type=3";
+            String qrBase64 = QRCodeGenerator.generateBase64(qrImgUrl, 300, 300);
 
-        if (!imgSrc.isEmpty()) {
             return "<!DOCTYPE html>" +
                    "<html><head><meta charset=\"UTF-8\"><title>Vibe WeChat - QR Code</title>" +
                    "<style>body{font-family:Arial;text-align:center;padding:50px;}" +
                    "h1{color:#333;}img{border:2px solid #ccc;padding:10px;max-width:300px;}p{color:#666;}</style></head>" +
                    "<body><h1>Vibe WeChat</h1><p>扫描二维码连接微信 ilink</p>" +
-                   "<img src=\"" + imgSrc + "\" alt=\"QR Code\">" +
+                   "<img src=\"data:image/png;base64," + qrBase64 + "\" alt=\"QR Code\">" +
                    "<p>服务状态: " + status + "</p>" +
                    "<p>QR Code Token: " + qrcode + "</p></body></html>";
         } else {
