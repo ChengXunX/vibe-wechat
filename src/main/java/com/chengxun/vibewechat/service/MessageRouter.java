@@ -91,7 +91,13 @@ public class MessageRouter {
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
-                    String msg = "🔧 工具调用: " + toolName + "\n" + toolInput;
+                    // 清理 JSON 转义字符
+                    String cleanInput = toolInput
+                        .replace("\\\"", "\"")
+                        .replace("\\n", "\n")
+                        .replace("\\t", "\t")
+                        .replace("\\\\", "\\");
+                    String msg = "🔧 工具调用: " + toolName + "\n" + cleanInput;
                     ilinkService.sendText(userId, msg, contextToken);
                 }
             }
