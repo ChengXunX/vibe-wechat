@@ -184,10 +184,10 @@ public class MessageRouter {
 
             if (!blocked && response != null && !response.isEmpty()) {
                 // 生成任务摘要
-                String taskSummary = generateTaskSummary(message);
+                String taskSummary = claudeApiService.getTaskSummary(userId, message);
                 // 添加完成标记、任务摘要、耗时和 token 统计
-                String summary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                String fullResponse = "✅ 任务完成\n---\n" + taskSummary + "\n\n" + response + "\n\n" + summary;
+                String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
+                String fullResponse = "✅ 任务完成\n---\n" + taskSummary + "\n\n" + response + "\n\n" + statsSummary;
 
                 // 检查是否接近消息限制
                 if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {

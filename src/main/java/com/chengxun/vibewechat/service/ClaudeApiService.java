@@ -416,6 +416,52 @@ public class ClaudeApiService {
         return String.valueOf(tokens);
     }
 
+    public String getTaskSummary(String userId, String originalMessage) {
+        // 使用 Claude 生成任务摘要
+        String installPath = claudeConfig.getInstallPath();
+        if (installPath == null || installPath.isEmpty()) {
+            return "任务完成";
+        }
+
+        try {
+            String prompt = "用一句话简要总结这个任务：" + originalMessage + "。只输出摘要，不要其他内容。";
+            List<String> command = new ArrayList<>();
+            command.add(installPath);
+            command.add("--print");
+            command.add("--output-format");
+            command.add("json");
+            command.add("--verbose");
+            command.add("--dangerously-skip-permissions");
+            command.add("--model");
+            command.add(claudeConfig.getModel());
+            command.add(prompt);
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith("Warning:") || line.startsWith("Error:")) continue;
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
+                        if ("result".equals(node.get("type").asText())) {
+                            output.append(node.get("result").asText());
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+            process.waitFor();
+
+            String summary = output.toString().trim();
+            return summary.isEmpty() ? "任务完成" : summary;
+        } catch (Exception e) {
+            return "任务完成";
+        }
+    }
+
     private String formatDuration(long ms) {
         if (ms < 1000) {
             return ms + "ms";
