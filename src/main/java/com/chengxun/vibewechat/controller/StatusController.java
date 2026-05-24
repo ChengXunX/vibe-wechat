@@ -99,14 +99,19 @@ public class StatusController {
                    "      }" +
                    "    }).catch(e=>{});" +
                    "}" +
+                   "var timerId=null;" +
+                   "var lastCheck=0;" +
                    "function timer(){" +
                    "  document.getElementById('countdown').textContent=countdown;" +
-                   "  checkStatus();" +
-                   "  if(countdown<=0){location.reload();}" +
+                   "  if(countdown<=0){clearInterval(timerId);location.reload();return;}" +
                    "  countdown--;" +
-                   "  setTimeout(timer,3000);" +
+                   "  var now=Date.now();" +
+                   "  if(now-lastCheck>3000){" +
+                   "    lastCheck=now;" +
+                   "    checkStatus();" +
+                   "  }" +
                    "}" +
-                   "window.onload=timer;" +
+                   "window.onload=function(){timerId=setInterval(timer,1000);};" +
                    "</script></head>" +
                    "<body><h1>Vibe We Chat</h1><p>扫描二维码连接微信 ilink</p>" +
                    "<img src=\"data:image/png;base64," + qrBase64 + "\" alt=\"QR Code\">" +
