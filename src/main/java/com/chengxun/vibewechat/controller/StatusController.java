@@ -22,7 +22,7 @@ public class StatusController {
     @Autowired
     private IlInkService ilinkService;
 
-    @Value("${vibe-wechat.ilink.base-url:https://api.ilink.bot}")
+    @Value("${vibe-wechat.ilink.base-url:https://ilinkai.weixin.qq.com}")
     private String ilinkBaseUrl;
 
     @GetMapping("/status")
@@ -65,8 +65,8 @@ public class StatusController {
         String status = ilinkService.isConnected() ? "已连接" : "未连接";
 
         if (!qrcode.isEmpty()) {
-            // 使用 qrcode token 生成二维码图片
-            String qrImgUrl = "https://liteapp.weixin.qq.com/q/" + qrcode.substring(0, 6) + "?qrcode=" + qrcode + "&bot_type=3";
+            // 使用 qrcode_img_content 生成二维码图片
+            String qrImgUrl = "https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=" + qrcode + "&bot_type=3";
             String qrBase64 = QRCodeGenerator.generateBase64(qrImgUrl, 300, 300);
 
             return "<!DOCTYPE html>" +
