@@ -230,22 +230,30 @@ public class IlInkConnectionHandler {
     }
 
     public void sendTyping(String userId) {
-        if (!connected || botToken.isEmpty()) return;
+        if (!connected || botToken.isEmpty()) {
+            log.debug("Cannot send typing: connected={}, tokenEmpty={}", connected, botToken.isEmpty());
+            return;
+        }
         try {
             String url = baseUrl + "/ilink/bot/send_typing";
             String jsonBody = String.format("{\"user_id\":\"%s\",\"status\":1}", userId);
 
+            log.debug("Sending typing status to {}", userId);
+
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
+                    .header("AuthorizationType", "ilink_bot_token")
                     .header("Authorization", "Bearer " + botToken)
+                    .header("X-WECHAT-UIN", randomUin())
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .timeout(Duration.ofSeconds(5))
                     .build();
 
-            httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            log.debug("Typing status response: {}", response.statusCode());
         } catch (Exception e) {
-            log.debug("Failed to send typing status", e);
+            log.debug("Failed to send typing status: {}", e.getMessage());
         }
     }
 
@@ -258,7 +266,9 @@ public class IlInkConnectionHandler {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
+                    .header("AuthorizationType", "ilink_bot_token")
                     .header("Authorization", "Bearer " + botToken)
+                    .header("X-WECHAT-UIN", randomUin())
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .timeout(Duration.ofSeconds(5))
                     .build();

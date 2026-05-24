@@ -28,6 +28,7 @@ public class ClaudeApiService {
 
     private final Map<String, List<Map<String, String>>> conversationHistory = new ConcurrentHashMap<>();
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
+    private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -155,6 +156,13 @@ public class ClaudeApiService {
                 command.add(model);
             }
 
+            // 添加会话恢复（保持上下文）
+            String sessionId = sessionIds.get(userId);
+            if (sessionId != null) {
+                command.add("--resume");
+                command.add(sessionId);
+            }
+
             // 添加消息（作为最后一个参数）
             command.add(message);
 
@@ -205,33 +213,33 @@ public class ClaudeApiService {
 
     private String parseJsonResponse(String userId, String json) {
         try {
-            // 解析 JSON 响应
-            int resultStart = json.indexOf("\"result\":\"") + 10;
-            int resultEnd = json.indexOf("\"", resultStart);
-            if (resultStart > 9 && resultEnd > resultStart) {
-                String result = json.substring(resultStart, resultEnd);
-                // 处理 Unicode 转义
-                result = result.replace("\\n", "\n").replace("\\\"", "\"");
-                // 处理 Unicode surrogate pairs
-                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\\\u([0-9a-fA-F]{4})");
-                java.util.regex.Matcher matcher = pattern.matcher(result);
-                StringBuffer sb = new StringBuffer();
-                while (matcher.find()) {
-                    int codePoint = Integer.parseInt(matcher.group(1), 16);
-                    matcher.appendReplacement(sb, new String(Character.toChars(codePoint)));
-                }
-                matcher.appendTail(sb);
-                result = sb.toString();
+            // 使用 Jackson 解析 JSON
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
 
-                // 解析 token 使用量
-                parseJsonTokenUsage(userId, json);
+            // 获取 result 字段
+            String result = root.get("result").asText();
 
-                return result;
+            // 保存 session_id 用于维持上下文
+            com.fasterxml.jackson.databind.JsonNode sessionNode = root.get("session_id");
+            if (sessionNode != null) {
+                sessionIds.put(userId, sessionNode.asText());
             }
+
+            // 解析 token 使用量
+            com.fasterxml.jackson.databind.JsonNode usage = root.get("usage");
+            if (usage != null) {
+                int inputTokens = usage.get("input_tokens").asInt();
+                int outputTokens = usage.get("output_tokens").asInt();
+                TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
+                tokenUsage.add(inputTokens, outputTokens);
+            }
+
+            return result;
         } catch (Exception e) {
             log.error("Failed to parse JSON response", e);
+            return "解析响应失败";
         }
-        return "解析响应失败";
     }
 
     private void parseJsonTokenUsage(String userId, String json) {
@@ -256,6 +264,7 @@ public class ClaudeApiService {
     public void clearHistory(String userId) {
         conversationHistory.remove(userId);
         tokenUsageMap.remove(userId);
+        sessionIds.remove(userId);
     }
 
     public String getSessionId(String userId) {

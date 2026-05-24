@@ -1,12 +1,6 @@
 server:
   port: 9921
 
-spring:
-  data:
-    redis:
-      host: localhost
-      port: 6379
-
 vibe-wechat:
   claude:
     api-key: ${CLAUDE_API_KEY:}

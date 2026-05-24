@@ -4,7 +4,6 @@ import com.chengxun.vibewechat.config.FilterConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -26,9 +25,6 @@ public class MessageRouter {
 
     @Autowired
     private FilterConfig filterConfig;
-
-    @Autowired
-    private StringRedisTemplate redisTemplate;
 
     @Autowired
     private ConfigService configService;
