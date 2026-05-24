@@ -518,6 +518,7 @@ public class MessageRouter {
             case "fileedit" -> filterConfig.setShowFileEdit(newValue);
         }
 
+        configService.saveConfig();
         ilinkService.sendText(userId, type + " 已设置为: " + (newValue ? "显示" : "隐藏"), contextToken);
     }
 

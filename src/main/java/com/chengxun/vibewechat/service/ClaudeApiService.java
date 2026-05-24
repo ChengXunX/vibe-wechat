@@ -203,29 +203,25 @@ public class ClaudeApiService {
                         String type = node.get("type").asText();
 
                         if ("assistant".equals(type)) {
-                            // 助手消息 - 提取文本
+                            // 助手消息 - 提取文本和工具调用
                             com.fasterxml.jackson.databind.JsonNode messageNode = node.get("message");
-                            if (messageNode != null && messageNode.isArray()) {
-                                for (com.fasterxml.jackson.databind.JsonNode item : messageNode) {
-                                    String itemType = item.get("type").asText();
-                                    if ("text".equals(itemType)) {
-                                        output.append(item.get("text").asText());
+                            if (messageNode != null) {
+                                com.fasterxml.jackson.databind.JsonNode contentNode = messageNode.get("content");
+                                if (contentNode != null && contentNode.isArray()) {
+                                    for (com.fasterxml.jackson.databind.JsonNode item : contentNode) {
+                                        String itemType = item.get("type").asText();
+                                        if ("text".equals(itemType)) {
+                                            output.append(item.get("text").asText());
+                                        } else if ("tool_use".equals(itemType)) {
+                                            // 工具调用
+                                            String toolName = item.get("name").asText();
+                                            String toolInput = item.get("input").toString();
+                                            if (toolCallback != null) {
+                                                toolCallback.onToolUse(userId, toolName, toolInput);
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                        } else if ("tool_use".equals(type)) {
-                            // 工具调用 - 根据配置决定是否通知
-                            String toolName = node.get("name").asText();
-                            String toolInput = node.get("input").toString();
-                            // 通知用户工具调用（根据配置）
-                            if (toolCallback != null) {
-                                toolCallback.onToolUse(userId, toolName, toolInput);
-                            }
-                        } else if ("tool_result".equals(type)) {
-                            // 工具结果 - 根据配置决定是否通知
-                            String toolResult = node.get("content").toString();
-                            if (toolCallback != null) {
-                                toolCallback.onToolResult(userId, toolResult);
                             }
                         } else if ("result".equals(type)) {
                             // 最终结果
