@@ -46,10 +46,12 @@ public class ClaudeApiService {
 
     private void detectClaudePath() {
         String[] commonPaths = {
+            "/usr/bin/claude",
             "/usr/local/bin/claude",
             "/opt/claude/bin/claude",
             System.getProperty("user.home") + "/claude/bin/claude",
-            System.getProperty("user.home") + "/.local/bin/claude"
+            System.getProperty("user.home") + "/.local/bin/claude",
+            System.getProperty("user.home") + "/.claude/bin/claude"
         };
 
         for (String path : commonPaths) {
@@ -59,7 +61,21 @@ public class ClaudeApiService {
                 return;
             }
         }
-        log.warn("Claude installation not found in common paths");
+
+        // 尝试通过 which 命令查找
+        try {
+            Process process = new ProcessBuilder("which", "claude").start();
+            String output = new String(process.getInputStream().readAllBytes()).trim();
+            if (!output.isEmpty() && Files.exists(Path.of(output))) {
+                claudeConfig.setInstallPath(output);
+                log.info("Detected Claude installation at: {}", output);
+                return;
+            }
+        } catch (Exception e) {
+            log.debug("Failed to find Claude via which command");
+        }
+
+        log.warn("Claude installation not found");
     }
 
     public static class TokenUsage {
