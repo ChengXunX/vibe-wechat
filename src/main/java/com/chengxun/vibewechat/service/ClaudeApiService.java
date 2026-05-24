@@ -7,13 +7,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,16 +26,11 @@ public class ClaudeApiService {
     @Autowired
     private FilterConfig filterConfig;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(30))
-            .build();
-
     private final Map<String, List<Map<String, String>>> conversationHistory = new ConcurrentHashMap<>();
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
-        // 自动检测 Claude 安装路径
         if (claudeConfig.getInstallPath() == null || claudeConfig.getInstallPath().isEmpty()) {
             detectClaudePath();
         }
@@ -63,7 +55,6 @@ public class ClaudeApiService {
             }
         }
 
-        // 尝试通过 which 命令查找
         try {
             Process process = new ProcessBuilder("which", "claude").start();
             String output = new String(process.getInputStream().readAllBytes()).trim();
@@ -139,43 +130,60 @@ public class ClaudeApiService {
     }
 
     public String sendMessage(String userId, String message) {
-        List<Map<String, String>> history = conversationHistory.computeIfAbsent(userId, k -> new ArrayList<>());
-
-        // 添加用户消息
-        history.add(Map.of("role", "user", "content", message));
+        String installPath = claudeConfig.getInstallPath();
+        if (installPath == null || installPath.isEmpty()) {
+            return "Claude 未安装或路径未配置";
+        }
 
         long startTime = System.currentTimeMillis();
 
         try {
-            String requestBody = buildRequestBody(history);
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(claudeConfig.getApiUrl() + "/v1/messages"))
-                    .header("Content-Type", "application/json")
-                    .header("x-api-key", claudeConfig.getApiKey())
-                    .header("anthropic-version", "2023-06-01")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .timeout(Duration.ofSeconds(60))
-                    .build();
+            // 构建 Claude CLI 命令
+            List<String> command = new ArrayList<>();
+            command.add(installPath);
+            command.add("--print");
+            command.add("--max-turns");
+            command.add("1");
+            command.add(message);
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            log.info("Executing Claude CLI: {}", String.join(" ", command));
 
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(true);
+
+            // 设置工作目录
+            String workDir = System.getProperty("user.dir");
+            if (workDir != null) {
+                pb.directory(new java.io.File(workDir));
+            }
+
+            Process process = pb.start();
+
+            // 读取输出
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            int exitCode = process.waitFor();
             long duration = System.currentTimeMillis() - startTime;
 
-            if (response.statusCode() == 200) {
-                String assistantMessage = parseResponse(response.body());
-                history.add(Map.of("role", "assistant", "content", assistantMessage));
+            String result = output.toString().trim();
 
-                // 解析 token 使用量
-                parseTokenUsage(userId, response.body());
-
-                return assistantMessage;
+            if (exitCode == 0 && !result.isEmpty()) {
+                return result;
+            } else if (exitCode != 0) {
+                log.error("Claude CLI exited with code: {}", exitCode);
+                return "Claude 执行失败 (exit code: " + exitCode + ")";
             } else {
-                log.error("Claude API error: {} - {}", response.statusCode(), response.body());
-                return "Claude API 调用失败: " + response.statusCode();
+                return "Claude 未返回结果";
             }
         } catch (Exception e) {
-            log.error("Failed to call Claude API", e);
-            return "Claude API 调用异常: " + e.getMessage();
+            log.error("Failed to execute Claude CLI", e);
+            return "Claude 执行异常: " + e.getMessage();
         }
     }
 
