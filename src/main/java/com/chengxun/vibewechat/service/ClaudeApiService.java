@@ -417,21 +417,17 @@ public class ClaudeApiService {
     }
 
     public String getTaskSummary(String userId, String originalMessage) {
-        // 使用 Claude 生成任务摘要
+        // 使用 Claude 生成任务摘要，提取核心任务描述
         String installPath = claudeConfig.getInstallPath();
         if (installPath == null || installPath.isEmpty()) {
             return "任务完成";
         }
 
         try {
-            String prompt = "用一句话简要总结这个任务：" + originalMessage + "。只输出摘要，不要其他内容。";
+            String prompt = "请从以下用户指令中提取核心任务描述（不超过15个字），只输出摘要，不要其他内容。用户指令：" + originalMessage;
             List<String> command = new ArrayList<>();
             command.add(installPath);
             command.add("--print");
-            command.add("--output-format");
-            command.add("json");
-            command.add("--verbose");
-            command.add("--dangerously-skip-permissions");
             command.add("--model");
             command.add(claudeConfig.getModel());
             command.add(prompt);
@@ -444,21 +440,18 @@ public class ClaudeApiService {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (line.startsWith("Warning:") || line.startsWith("Error:")) continue;
-                    try {
-                        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
-                        if ("result".equals(node.get("type").asText())) {
-                            output.append(node.get("result").asText());
-                        }
-                    } catch (Exception ignored) {}
+                    if (!line.startsWith("Warning:") && !line.startsWith("Error:")) {
+                        output.append(line);
+                    }
                 }
             }
-            process.waitFor();
+            process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
 
             String summary = output.toString().trim();
             return summary.isEmpty() ? "任务完成" : summary;
         } catch (Exception e) {
-            return "任务完成";
+            // 降级：直接返回原始消息前15字
+            return originalMessage.length() > 15 ? originalMessage.substring(0, 15) + "..." : originalMessage;
         }
     }
 
