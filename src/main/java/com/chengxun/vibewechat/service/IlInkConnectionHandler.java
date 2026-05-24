@@ -26,9 +26,6 @@ public class IlInkConnectionHandler {
     @Value("${vibe-wechat.ilink.port:9090}")
     private int port;
 
-    @Autowired
-    private MessageRouter messageRouter;
-
     private Channel channel;
     private EventLoopGroup group;
     private volatile boolean connected = false;
