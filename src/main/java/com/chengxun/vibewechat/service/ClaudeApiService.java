@@ -157,10 +157,10 @@ public class ClaudeApiService {
                 command.add(workDir);
             }
 
-            // 添加消息
+            // 添加消息（作为最后一个参数）
             command.add(message);
 
-            log.info("Executing Claude CLI: {} --print --model {} ...", installPath, model);
+            log.info("Executing Claude CLI with model: {}", model);
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
