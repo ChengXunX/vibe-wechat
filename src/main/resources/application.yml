@@ -1,0 +1,29 @@
+server:
+  port: 9921
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+vibe-wechat:
+  claude:
+    api-key: ${CLAUDE_API_KEY:}
+    api-url: ${CLAUDE_API_URL:https://api.anthropic.com}
+    model: claude-sonnet-4-20250514
+    max-tokens: 4096
+  ilink:
+    host: localhost
+    port: 9090
+  filter:
+    show-tool-calls: false
+    show-file-read: false
+    show-file-edit: false
+    show-file-operations: false
+    show-decisions-only: true
+    show-results-only: true
+    show-subtask-completion: true
+    show-task-completion: true
+    show-task-duration: true
+    max-messages-per-user: 10
