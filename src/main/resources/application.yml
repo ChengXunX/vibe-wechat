@@ -26,4 +26,4 @@ vibe-wechat:
     show-subtask-completion: true
     show-task-completion: true
     show-task-duration: true
-    max-messages-per-user: 10
+    max-messages-per-user: 999

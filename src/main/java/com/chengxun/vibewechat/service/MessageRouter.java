@@ -103,6 +103,9 @@ public class MessageRouter {
         String help = """
                 vibe-wechat 命令列表:
 
+                说明: 微信限制每条用户消息最多回复10次，
+                可通过 v-limit 设置内部限制（默认不限制）
+
                 v-help          显示此帮助
                 v-status        显示当前配置状态
 
@@ -121,7 +124,7 @@ public class MessageRouter {
                 v-filter <key> <value>  配置消息过滤
 
                 --- 消息配置 ---
-                v-limit <n>     设置每小时最大消息数（默认: 10）
+                v-limit <n>     设置每小时最大消息数（默认: 不限制）
                 v-token         查看/开关 token 消耗统计
 
                 --- 会话管理 ---
