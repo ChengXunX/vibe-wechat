@@ -151,7 +151,7 @@ public class ClaudeApiService {
             command.add(installPath);
             command.add("--print");
             command.add("--output-format");
-            command.add("json");
+            command.add("stream-json");
             command.add("--dangerously-skip-permissions");
 
             // 添加模型配置（支持 [1m] 等配置）
@@ -184,13 +184,74 @@ public class ClaudeApiService {
 
             Process process = pb.start();
 
-            // 读取输出
+            // 读取流式输出
             StringBuilder output = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 跳过警告信息行，只保留 JSON
-                    if (!line.startsWith("Warning:") && !line.startsWith("Error:")) {
+                    // 跳过警告信息行
+                    if (line.startsWith("Warning:") || line.startsWith("Error:")) {
+                        continue;
+                    }
+
+                    // 尝试解析 stream-json 格式
+                    try {
+                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                        com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(line);
+
+                        String type = node.get("type").asText();
+
+                        if ("assistant".equals(type)) {
+                            // 助手消息 - 提取文本
+                            com.fasterxml.jackson.databind.JsonNode messageNode = node.get("message");
+                            if (messageNode != null && messageNode.isArray()) {
+                                for (com.fasterxml.jackson.databind.JsonNode item : messageNode) {
+                                    String itemType = item.get("type").asText();
+                                    if ("text".equals(itemType)) {
+                                        output.append(item.get("text").asText());
+                                    }
+                                }
+                            }
+                        } else if ("tool_use".equals(type)) {
+                            // 工具调用 - 根据配置决定是否通知
+                            String toolName = node.get("name").asText();
+                            String toolInput = node.get("input").toString();
+                            // 通知用户工具调用（根据配置）
+                            if (toolCallback != null) {
+                                toolCallback.onToolUse(userId, toolName, toolInput);
+                            }
+                        } else if ("tool_result".equals(type)) {
+                            // 工具结果 - 根据配置决定是否通知
+                            String toolResult = node.get("content").toString();
+                            if (toolCallback != null) {
+                                toolCallback.onToolResult(userId, toolResult);
+                            }
+                        } else if ("result".equals(type)) {
+                            // 最终结果
+                            String result = node.get("result").asText();
+                            output.append(result);
+
+                            // 保存 session_id
+                            com.fasterxml.jackson.databind.JsonNode sessionNode = node.get("session_id");
+                            if (sessionNode != null) {
+                                sessionIds.put(userId, sessionNode.asText());
+                                sessionHistory.computeIfAbsent(userId, k -> new java.util.ArrayList<>());
+                                if (!sessionHistory.get(userId).contains(sessionNode.asText())) {
+                                    sessionHistory.get(userId).add(sessionNode.asText());
+                                }
+                            }
+
+                            // 解析 token 使用量
+                            com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
+                            if (usage != null) {
+                                int inputTokens = usage.get("input_tokens").asInt();
+                                int outputTokens = usage.get("output_tokens").asInt();
+                                TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
+                                tokenUsage.add(inputTokens, outputTokens);
+                            }
+                        }
+                    } catch (Exception e) {
+                        // 非 JSON 行，可能是纯文本输出
                         output.append(line).append("\n");
                     }
                 }
@@ -205,8 +266,7 @@ public class ClaudeApiService {
             log.info("Claude CLI completed in {}ms, exit code: {}", duration, exitCode);
 
             if (exitCode == 0 && !result.isEmpty()) {
-                // 尝试解析 JSON 格式的响应
-                return parseJsonResponse(userId, result);
+                return result;
             } else if (exitCode != 0) {
                 log.error("Claude CLI exited with code: {}, output: {}", exitCode, result);
                 return "Claude 执行失败 (exit code: " + exitCode + ")\n" + result;
@@ -217,6 +277,19 @@ public class ClaudeApiService {
             log.error("Failed to execute Claude CLI", e);
             return "Claude 执行异常: " + e.getMessage();
         }
+    }
+
+    // 工具调用回调接口
+    public interface ToolCallback {
+        void onToolUse(String userId, String toolName, String toolInput);
+        void onToolResult(String userId, String result);
+        void onSubtaskStatus(String userId, String status);
+    }
+
+    private ToolCallback toolCallback;
+
+    public void setToolCallback(ToolCallback callback) {
+        this.toolCallback = callback;
     }
 
     private String parseJsonResponse(String userId, String json) {

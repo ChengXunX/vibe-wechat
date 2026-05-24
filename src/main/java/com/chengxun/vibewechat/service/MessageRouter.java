@@ -60,9 +60,53 @@ public class MessageRouter {
     private static final String V_PROFILES = "v-profiles";
     private static final String V_THINKING = "v-thinking";
 
+    // 存储用户ID到contextToken的映射
+    private final Map<String, String> userContextTokens = new ConcurrentHashMap<>();
+
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
+        userContextTokens.put(event.getUserId(), event.getContextToken());
         handleMessage(event.getUserId(), event.getContent(), event.getContextToken());
+    }
+
+    @jakarta.annotation.PostConstruct
+    public void init() {
+        // 设置工具调用回调
+        claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
+            @Override
+            public void onToolUse(String userId, String toolName, String toolInput) {
+                // 根据配置决定是否发送工具调用通知
+                if (filterConfig.isShowToolCalls()) {
+                    String contextToken = userContextTokens.get(userId);
+                    String msg = "🔧 工具调用: " + toolName;
+                    if (toolInput.length() > 100) {
+                        msg += "\n" + toolInput.substring(0, 100) + "...";
+                    } else {
+                        msg += "\n" + toolInput;
+                    }
+                    ilinkService.sendText(userId, msg, contextToken);
+                }
+            }
+
+            @Override
+            public void onToolResult(String userId, String result) {
+                // 工具结果通知（根据配置）
+                if (filterConfig.isShowToolCalls()) {
+                    String contextToken = userContextTokens.get(userId);
+                    String msg = "📋 工具结果: " + (result.length() > 200 ? result.substring(0, 200) + "..." : result);
+                    ilinkService.sendText(userId, msg, contextToken);
+                }
+            }
+
+            @Override
+            public void onSubtaskStatus(String userId, String status) {
+                // 子任务状态通知（根据配置）
+                if (filterConfig.isShowSubtaskStatus()) {
+                    String contextToken = userContextTokens.get(userId);
+                    ilinkService.sendText(userId, "🔄 " + status, contextToken);
+                }
+            }
+        });
     }
 
     public void handleMessage(String userId, String message, String contextToken) {
@@ -221,12 +265,14 @@ public class MessageRouter {
                 `v-cd <path>`     切换工作目录
 
                 ━━━━━━━━━━━━━━━━━━━━━━
-                **⚙️ 消息过滤**
+                **⚙️ 通知配置**
                 ━━━━━━━━━━━━━━━━━━━━━━
-                `v-tools`         开关工具类消息
-                `v-fileread`      开关读取文件消息
-                `v-fileedit`      开关编辑文件消息
+                `v-tools`         开关工具调用通知
+                `v-fileread`      开关文件读取通知
+                `v-fileedit`      开关文件编辑通知
                 `v-filter <key> <value>`  高级过滤
+
+                *决策和执行结果始终通知*
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **🚫 关键词过滤**
