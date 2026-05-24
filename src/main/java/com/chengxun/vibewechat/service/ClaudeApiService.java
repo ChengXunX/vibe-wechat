@@ -142,17 +142,30 @@ public class ClaudeApiService {
             List<String> command = new ArrayList<>();
             command.add(installPath);
             command.add("--print");
-            command.add("--max-turns");
-            command.add("1");
+
+            // 添加模型配置（支持 [1m] 等配置）
+            String model = claudeConfig.getModel();
+            if (model != null && !model.isEmpty()) {
+                command.add("--model");
+                command.add(model);
+            }
+
+            // 添加工作目录
+            String workDir = System.getProperty("user.dir");
+            if (workDir != null) {
+                command.add("--add-dir");
+                command.add(workDir);
+            }
+
+            // 添加消息
             command.add(message);
 
-            log.info("Executing Claude CLI: {}", String.join(" ", command));
+            log.info("Executing Claude CLI: {} --print --model {} ...", installPath, model);
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(true);
 
             // 设置工作目录
-            String workDir = System.getProperty("user.dir");
             if (workDir != null) {
                 pb.directory(new java.io.File(workDir));
             }
@@ -173,11 +186,13 @@ public class ClaudeApiService {
 
             String result = output.toString().trim();
 
+            log.info("Claude CLI completed in {}ms, exit code: {}", duration, exitCode);
+
             if (exitCode == 0 && !result.isEmpty()) {
                 return result;
             } else if (exitCode != 0) {
-                log.error("Claude CLI exited with code: {}", exitCode);
-                return "Claude 执行失败 (exit code: " + exitCode + ")";
+                log.error("Claude CLI exited with code: {}, output: {}", exitCode, result);
+                return "Claude 执行失败 (exit code: " + exitCode + ")\n" + result;
             } else {
                 return "Claude 未返回结果";
             }
