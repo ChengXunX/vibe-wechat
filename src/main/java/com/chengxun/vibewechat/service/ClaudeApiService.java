@@ -25,6 +25,9 @@ public class ClaudeApiService {
     @Value("${vibe-wechat.claude.api-key:}")
     private String apiKey;
 
+    @Value("${vibe-wechat.claude.api-url:https://api.anthropic.com}")
+    private String apiUrl;
+
     @Value("${vibe-wechat.claude.model:claude-sonnet-4-20250514}")
     private String model;
 
@@ -62,7 +65,7 @@ public class ClaudeApiService {
         try {
             String requestBody = buildRequestBody(history);
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://api.anthropic.com/v1/messages"))
+                    .uri(URI.create(apiUrl + "/v1/messages"))
                     .header("Content-Type", "application/json")
                     .header("x-api-key", apiKey)
                     .header("anthropic-version", "2023-06-01")
@@ -197,10 +200,10 @@ public class ClaudeApiService {
     // Getters and Setters
     public String getApiKey() { return apiKey; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+    public String getApiUrl() { return apiUrl; }
+    public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl; }
     public String getModel() { return model; }
     public void setModel(String model) { this.model = model; }
     public int getMaxTokens() { return maxTokens; }
     public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
-    public String getApiUrl() { return "https://api.anthropic.com/v1/messages"; }
-    public void setApiUrl(String apiUrl) { /* 存储自定义API地址 */ }
 }

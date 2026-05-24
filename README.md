@@ -9,6 +9,7 @@
 3. 消息过滤 - 配置 Claude 输出内容
 4. 会话管理 - 新建/切换/清空会话
 5. 实时配置 - 通过微信消息配置 API 和 Key
+6. Token 统计 - 显示每次对话的 Token 消耗
 
 ## 部署方式
 
@@ -37,22 +38,34 @@ java -jar target/vibe-wechat-1.0-SNAPSHOT.jar
 
 **帮助和状态**
 - `v-help` - 显示所有命令
-- `v-status` - 显示当前配置
+- `v-status` - 显示当前配置和 Token 使用
 
 **Claude 配置**
-- `v-api <url>` - 设置 Claude API 地址
+- `v-api <url>` - 设置 Claude API 地址（默认: https://api.anthropic.com）
 - `v-key <key>` - 设置 Claude API Key
-- `v-model <name>` - 设置 Claude 模型
+- `v-model <name>` - 设置 Claude 模型（默认: claude-sonnet-4-20250514）
 
-**消息过滤**
+**快捷过滤**
+- `v-tools` - 开关工具类消息
+- `v-fileread` - 开关读取文件类消息
+- `v-fileedit` - 开关编辑文件类消息
+
+**高级过滤**
 - `v-filter tools true/false` - 工具调用
-- `v-filter files true/false` - 文件操作
+- `v-filter fileread true/false` - 读取文件
+- `v-filter fileedit true/false` - 编辑文件
+- `v-filter files true/false` - 所有文件操作
 - `v-filter decisions true/false` - 决策消息
 - `v-filter results true/false` - 结果消息
 - `v-filter subtasks true/false` - 子任务
 - `v-filter tasks true/false` - 任务完成
 - `v-filter duration true/false` - 耗时显示
-- `v-limit <n>` - 每小时消息限制
+- `v-filter token true/false` - Token 统计
+
+**消息配置**
+- `v-limit <n>` - 每小时消息限制（默认: 10）
+- `v-token` - 查看当前 Token 使用
+- `v-token true/false` - 开关 Token 统计显示
 
 **会话管理**
 - `v-new` - 新建会话
@@ -67,19 +80,31 @@ java -jar target/vibe-wechat-1.0-SNAPSHOT.jar
 vibe-wechat:
   claude:
     api-key: your-api-key
+    api-url: https://api.anthropic.com
     model: claude-sonnet-4-20250514
+    max-tokens: 4096
   ilink:
     host: localhost
     port: 9090
   filter:
     show-tool-calls: false
+    show-file-read: false
+    show-file-edit: false
     show-file-operations: false
     show-decisions-only: true
     show-results-only: true
     show-subtask-completion: true
     show-task-completion: true
     show-task-duration: true
+    show-token-usage: true
     max-messages-per-user: 10
+```
+
+### 环境变量
+
+```bash
+CLAUDE_API_KEY=your-api-key
+CLAUDE_API_URL=https://api.anthropic.com
 ```
 
 ## 消息处理逻辑
@@ -90,4 +115,5 @@ vibe-wechat:
 4. 发送"正在输入"状态
 5. 转发给 Claude API
 6. 根据过滤配置筛选消息
-7. 返回给用户
+7. 记录 Token 使用量
+8. 返回给用户
