@@ -114,6 +114,7 @@ public class MessageRouter {
         try {
             // 转发给 Claude
             String response = claudeApiService.sendMessage(userId, message);
+            long duration = System.currentTimeMillis() - startTime;
 
             // 检查是否包含屏蔽关键词
             boolean blocked = false;
@@ -124,15 +125,17 @@ public class MessageRouter {
                 }
             }
 
-            if (!blocked) {
-                // 检查是否接近消息限制，添加提示
+            if (!blocked && response != null && !response.isEmpty()) {
+                // 添加耗时和 token 统计到响应末尾
+                String summary = claudeApiService.getTaskCompletionSummary(userId, duration);
+                String fullResponse = response + "\n\n" + summary;
+
+                // 检查是否接近消息限制
                 if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
-                    long duration = System.currentTimeMillis() - startTime;
-                    String summary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                    String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + response + "\n\n" + summary;
+                    String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + fullResponse;
                     ilinkService.sendText(userId, warning, contextToken);
-                } else if (response != null && !response.isEmpty()) {
-                    ilinkService.sendText(userId, response, contextToken);
+                } else {
+                    ilinkService.sendText(userId, fullResponse, contextToken);
                 }
             }
         } finally {
