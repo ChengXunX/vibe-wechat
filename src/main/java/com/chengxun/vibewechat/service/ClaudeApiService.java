@@ -142,6 +142,7 @@ public class ClaudeApiService {
             List<String> command = new ArrayList<>();
             command.add(installPath);
             command.add("--print");
+            command.add("--dangerously-skip-permissions");
 
             // 添加模型配置（支持 [1m] 等配置）
             String model = claudeConfig.getModel();
@@ -171,7 +172,10 @@ public class ClaudeApiService {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
+                    // 过滤 Claude CLI 的警告信息
+                    if (!line.startsWith("Warning:") && !line.startsWith("Error:")) {
+                        output.append(line).append("\n");
+                    }
                 }
             }
 

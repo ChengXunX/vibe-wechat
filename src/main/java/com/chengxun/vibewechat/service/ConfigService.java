@@ -66,6 +66,21 @@ public class ConfigService {
             filter.put("blockedKeywords", filterConfig.getBlockedKeywords());
             config.put("filter", filter);
 
+            // 保存 switch 配置
+            Map<String, Object> switchCfg = new HashMap<>();
+            switchCfg.put("activeProfile", switchConfig.getActiveProfile());
+            List<Map<String, Object>> profiles = new ArrayList<>();
+            for (SwitchConfig.SwitchProfile profile : switchConfig.getProfiles()) {
+                Map<String, Object> p = new HashMap<>();
+                p.put("name", profile.getName());
+                p.put("apiUrl", profile.getApiUrl());
+                p.put("apiKey", profile.getApiKey());
+                p.put("model", profile.getModel());
+                profiles.add(p);
+            }
+            switchCfg.put("profiles", profiles);
+            config.put("switch", switchCfg);
+
             objectMapper.writeValue(new File(CONFIG_FILE), config);
             log.info("Config saved to {}", CONFIG_FILE);
         } catch (IOException e) {
@@ -120,6 +135,29 @@ public class ConfigService {
                     @SuppressWarnings("unchecked")
                     java.util.List<String> keywords = (java.util.List<String>) filter.get("blockedKeywords");
                     filterConfig.setBlockedKeywords(keywords != null ? keywords : new java.util.ArrayList<>());
+                }
+            }
+
+            // 加载 switch 配置
+            @SuppressWarnings("unchecked")
+            Map<String, Object> switchCfg = (Map<String, Object>) config.get("switch");
+            if (switchCfg != null) {
+                if (switchCfg.containsKey("activeProfile")) {
+                    switchConfig.setActiveProfile((String) switchCfg.get("activeProfile"));
+                }
+                if (switchCfg.containsKey("profiles")) {
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> profiles = (List<Map<String, Object>>) switchCfg.get("profiles");
+                    if (profiles != null) {
+                        for (Map<String, Object> p : profiles) {
+                            SwitchConfig.SwitchProfile profile = new SwitchConfig.SwitchProfile();
+                            profile.setName((String) p.get("name"));
+                            profile.setApiUrl((String) p.get("apiUrl"));
+                            profile.setApiKey((String) p.get("apiKey"));
+                            profile.setModel((String) p.get("model"));
+                            switchConfig.getProfiles().add(profile);
+                        }
+                    }
                 }
             }
 

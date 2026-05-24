@@ -186,7 +186,7 @@ public class MessageRouter {
                 ━━━━━━━━━━━━━━━━━━━━━━
                 `v-model <name>`   设置模型（支持 [1m] 配置）
                 `v-claude <path>`  设置安装路径
-                `v-thinking`       开关推理模式
+                `v-thinking <级别>` 开关推理模式 (off/low/medium/high)
                 `v-switch <name>`  切换预设配置
                 `v-save <name>`    保存当前配置
                 `v-profiles`       列出所有预设
@@ -626,25 +626,37 @@ public class MessageRouter {
         if (parts.length < 2) {
             String status = claudeApiService.isThinkingEnabled() ? "开启" : "关闭";
             int budget = claudeApiService.getThinkingBudgetTokens();
-            ilinkService.sendText(userId, "用法: v-thinking true/false [budget]\n当前状态: " + status + "\n推理预算: " + budget + " tokens", contextToken);
+            ilinkService.sendText(userId, "用法: v-thinking <级别>\n当前状态: " + status + "\n推理预算: " + budget + " tokens\n\n级别:\n- off: 关闭\n- low: 低强度 (5000 tokens)\n- medium: 中强度 (10000 tokens)\n- high: 高强度 (20000 tokens)", contextToken);
             return;
         }
 
-        boolean value = Boolean.parseBoolean(parts[1].toLowerCase());
-        claudeApiService.setThinkingEnabled(value);
-
-        if (parts.length > 2) {
-            try {
-                int budget = Integer.parseInt(parts[2]);
-                claudeApiService.setThinkingBudgetTokens(budget);
-            } catch (NumberFormatException e) {
-                ilinkService.sendText(userId, "无效的预算数量: " + parts[2], contextToken);
-                return;
+        String level = parts[1].toLowerCase();
+        switch (level) {
+            case "off", "false", "0" -> {
+                claudeApiService.setThinkingEnabled(false);
+                configService.saveConfig();
+                ilinkService.sendText(userId, "推理模式已关闭", contextToken);
             }
+            case "low", "1" -> {
+                claudeApiService.setThinkingEnabled(true);
+                claudeApiService.setThinkingBudgetTokens(5000);
+                configService.saveConfig();
+                ilinkService.sendText(userId, "推理模式: 低强度 (5000 tokens)", contextToken);
+            }
+            case "medium", "2" -> {
+                claudeApiService.setThinkingEnabled(true);
+                claudeApiService.setThinkingBudgetTokens(10000);
+                configService.saveConfig();
+                ilinkService.sendText(userId, "推理模式: 中强度 (10000 tokens)", contextToken);
+            }
+            case "high", "3" -> {
+                claudeApiService.setThinkingEnabled(true);
+                claudeApiService.setThinkingBudgetTokens(20000);
+                configService.saveConfig();
+                ilinkService.sendText(userId, "推理模式: 高强度 (20000 tokens)", contextToken);
+            }
+            default -> ilinkService.sendText(userId, "无效的级别: " + level + "\n可用级别: off, low, medium, high", contextToken);
         }
-
-        configService.saveConfig();
-        ilinkService.sendText(userId, "推理模式已设置为: " + (value ? "开启" : "关闭"), contextToken);
     }
 
     private String checkEasterEgg(String message) {
