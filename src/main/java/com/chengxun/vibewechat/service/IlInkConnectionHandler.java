@@ -231,14 +231,14 @@ public class IlInkConnectionHandler {
 
     public void sendTyping(String userId) {
         if (!connected || botToken.isEmpty()) {
-            log.debug("Cannot send typing: connected={}, tokenEmpty={}", connected, botToken.isEmpty());
+            log.info("Cannot send typing: connected={}, tokenEmpty={}", connected, botToken.isEmpty());
             return;
         }
         try {
             String url = baseUrl + "/ilink/bot/send_typing";
             String jsonBody = String.format("{\"user_id\":\"%s\",\"status\":1}", userId);
 
-            log.debug("Sending typing status to {}", userId);
+            log.info("Sending typing status to {}", userId);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -251,9 +251,9 @@ public class IlInkConnectionHandler {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            log.debug("Typing status response: {}", response.statusCode());
+            log.info("Typing status response: {}", response.statusCode());
         } catch (Exception e) {
-            log.debug("Failed to send typing status: {}", e.getMessage());
+            log.info("Failed to send typing status: {}", e.getMessage());
         }
     }
 

@@ -184,7 +184,10 @@ public class ClaudeApiService {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    output.append(line).append("\n");
+                    // 跳过警告信息行，只保留 JSON
+                    if (!line.startsWith("Warning:") && !line.startsWith("Error:")) {
+                        output.append(line).append("\n");
+                    }
                 }
             }
 
