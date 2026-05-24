@@ -56,8 +56,9 @@ public class IlInkConnectionHandler {
     }
 
     private void startPolling() {
-        if (scheduler != null) {
-            scheduler.shutdown();
+        if (scheduler != null && !scheduler.isShutdown()) {
+            log.info("Polling already running, skipping");
+            return;
         }
 
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -66,16 +67,20 @@ public class IlInkConnectionHandler {
             return t;
         });
 
-        scheduler.scheduleAtFixedRate(() -> {
-            try {
-                pollUpdates();
-            } catch (Exception e) {
-                log.debug("Poll error: {}", e.getMessage());
-            }
-        }, 0, 1, TimeUnit.SECONDS);
-
         connected = true;
         log.info("Started ilink polling with bot_token");
+
+        // 使用独立线程进行长轮询，避免阻塞调度器
+        new Thread(() -> {
+            while (connected && !Thread.currentThread().isInterrupted()) {
+                try {
+                    pollUpdates();
+                } catch (Exception e) {
+                    log.debug("Poll error: {}", e.getMessage());
+                    try { Thread.sleep(1000); } catch (InterruptedException ie) { break; }
+                }
+            }
+        }, "ilink-poll-worker").start();
     }
 
     private String lastUpdatesBuf = "";

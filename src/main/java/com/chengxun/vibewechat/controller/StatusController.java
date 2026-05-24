@@ -33,6 +33,18 @@ public class StatusController {
         );
     }
 
+    @GetMapping("/connected")
+    public String connected() {
+        return "<!DOCTYPE html>" +
+               "<html><head><meta charset=\"UTF-8\"><title>Vibe WeChat - Connected</title>" +
+               "<style>body{font-family:Arial;text-align:center;padding:50px;}" +
+               "h1{color:green;}p{color:#666;}</style></head>" +
+               "<body><h1>Vibe WeChat 已连接!</h1>" +
+               "<p>微信 ilink 连接成功，可以关闭此页面。</p>" +
+               "<p>直接在微信中发送消息即可与 Claude 对话。</p>" +
+               "<p>发送 v-help 查看所有命令。</p></body></html>";
+    }
+
     @GetMapping("/qrcode")
     public String qrcode() throws Exception {
         String apiUrl = ilinkBaseUrl + "/ilink/bot/get_bot_qrcode?bot_type=3";
@@ -81,7 +93,7 @@ public class StatusController {
                    "      if(d.status==='confirmed'){" +
                    "        document.getElementById('status').innerHTML='<span class=\"connected\">已连接!</span>';" +
                    "        document.getElementById('status').className='connected';" +
-                   "        setTimeout(function(){window.close();},2000);" +
+                   "        setTimeout(function(){location.href='/connected';},2000);" +
                    "      }else if(d.status==='scaned'){" +
                    "        document.getElementById('status').innerHTML='已扫码，等待确认...';" +
                    "      }" +
