@@ -76,20 +76,21 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                int count = getMessageCount(userId);
+                // 先递增计数器
+                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
                 log.info("Tool callback: userId={}, toolName={}, count={}, max={}", userId, toolName, count, MESSAGE_LIMIT);
 
-                // 达到第9条时，发送警告并停止后续通知
-                if (count >= MESSAGE_LIMIT - 1) {
-                    if (count == MESSAGE_LIMIT - 1) {
-                        String contextToken = userContextTokens.get(userId);
-                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
-                    }
+                // 达到第9条时，发送警告
+                if (count == MESSAGE_LIMIT - 1) {
+                    String contextToken = userContextTokens.get(userId);
+                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
                     return;
                 }
 
-                // 计数+1
-                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+                // 达到第10条时，停止发送通知
+                if (count >= MESSAGE_LIMIT) {
+                    return;
+                }
 
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
@@ -107,20 +108,20 @@ public class MessageRouter {
 
             @Override
             public void onToolResult(String userId, String result) {
-                int count = getMessageCount(userId);
-                int max = MESSAGE_LIMIT;
+                // 先递增计数器
+                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
-                // 达到第9条时，发送警告并停止后续通知
-                if (count >= MESSAGE_LIMIT - 1) {
-                    if (count == MESSAGE_LIMIT - 1) {
-                        String contextToken = userContextTokens.get(userId);
-                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
-                    }
+                // 达到第9条时，发送警告
+                if (count == MESSAGE_LIMIT - 1) {
+                    String contextToken = userContextTokens.get(userId);
+                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
                     return;
                 }
 
-                // 计数+1
-                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+                // 达到第10条时，停止发送通知
+                if (count >= MESSAGE_LIMIT) {
+                    return;
+                }
 
                 // 工具结果通知（根据配置）
                 if (filterConfig.isShowToolCalls()) {
@@ -132,20 +133,20 @@ public class MessageRouter {
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                int count = getMessageCount(userId);
-                int max = MESSAGE_LIMIT;
+                // 先递增计数器
+                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
-                // 达到第9条时，发送警告并停止后续通知
-                if (count >= MESSAGE_LIMIT - 1) {
-                    if (count == MESSAGE_LIMIT - 1) {
-                        String contextToken = userContextTokens.get(userId);
-                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
-                    }
+                // 达到第9条时，发送警告
+                if (count == MESSAGE_LIMIT - 1) {
+                    String contextToken = userContextTokens.get(userId);
+                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
                     return;
                 }
 
-                // 计数+1
-                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+                // 达到第10条时，停止发送通知
+                if (count >= MESSAGE_LIMIT) {
+                    return;
+                }
 
                 // 子任务状态通知（根据配置）
                 if (filterConfig.isShowSubtaskStatus()) {
