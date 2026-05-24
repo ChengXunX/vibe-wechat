@@ -21,7 +21,7 @@ public class IlInkService {
 
     private final Set<String> connectedUsers = ConcurrentHashMap.newKeySet();
 
-    private static final String WELCOME_MESSAGE = """
+    public static final String WELCOME_MESSAGE = """
             **🎉 欢迎使用 VibeWechat!**
 
             ━━━━━━━━━━━━━━━━━━━━━━
@@ -85,12 +85,12 @@ public class IlInkService {
                 }
 
                 if (userId != null && content != null) {
-                    if (!connectedUsers.contains(userId)) {
+                    boolean isNewUser = !connectedUsers.contains(userId);
+                    if (isNewUser) {
                         connectedUsers.add(userId);
-                        sendText(userId, WELCOME_MESSAGE, contextToken);
                     }
 
-                    eventPublisher.publishEvent(new IlInkMessageEvent(this, userId, content, contextToken));
+                    eventPublisher.publishEvent(new IlInkMessageEvent(this, userId, content, contextToken, isNewUser));
                 }
             }
         } catch (Exception e) {
@@ -152,15 +152,18 @@ public class IlInkService {
         private final String userId;
         private final String content;
         private final String contextToken;
+        private final boolean isNewUser;
 
-        public IlInkMessageEvent(Object source, String userId, String content, String contextToken) {
+        public IlInkMessageEvent(Object source, String userId, String content, String contextToken, boolean isNewUser) {
             this.userId = userId;
             this.content = content;
             this.contextToken = contextToken;
+            this.isNewUser = isNewUser;
         }
 
         public String getUserId() { return userId; }
         public String getContent() { return content; }
         public String getContextToken() { return contextToken; }
+        public boolean isNewUser() { return isNewUser; }
     }
 }

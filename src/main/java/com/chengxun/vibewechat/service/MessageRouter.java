@@ -69,7 +69,7 @@ public class MessageRouter {
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
         userContextTokens.put(event.getUserId(), event.getContextToken());
-        handleMessage(event.getUserId(), event.getContent(), event.getContextToken());
+        handleMessage(event.getUserId(), event.getContent(), event.getContextToken(), event.isNewUser());
     }
 
     @jakarta.annotation.PostConstruct
@@ -163,6 +163,10 @@ public class MessageRouter {
     }
 
     public void handleMessage(String userId, String message, String contextToken) {
+        handleMessage(userId, message, contextToken, false);
+    }
+
+    public void handleMessage(String userId, String message, String contextToken, boolean isNewUser) {
         // 检查是否为 vibe-wechat 配置命令（v- 开头）
         if (message.startsWith(V_PREFIX)) {
             handleVibeCommand(userId, message, contextToken);
@@ -184,6 +188,11 @@ public class MessageRouter {
         if (!checkMessageLimit(userId)) {
             ilinkService.sendText(userId, "消息次数已达上限，请稍后再试", contextToken);
             return;
+        }
+
+        // 如果是新用户，发送欢迎语（计入消息次数）
+        if (isNewUser) {
+            ilinkService.sendText(userId, IlInkService.WELCOME_MESSAGE, contextToken);
         }
 
         // 发送输入状态
