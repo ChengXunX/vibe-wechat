@@ -22,27 +22,24 @@ public class IlInkService {
     private final Set<String> connectedUsers = ConcurrentHashMap.newKeySet();
 
     public static final String WELCOME_MESSAGE = """
-            **🎉 欢迎使用 VibeWechat!**
+            **🎉 欢迎使用 VibeWechat**
 
             ━━━━━━━━━━━━━━━━━━━━━━
-            **⚡ 快速开始**
-            ━━━━━━━━━━━━━━━━━━━━━━
-            发送 `v-model <名称>` 设置模型
-            发送 `v-switch <名称>` 快速切换配置
-            发送 `v-help` 查看所有命令
-
-            ━━━━━━━━━━━━━━━━━━━━━━
-            **🔧 常用命令**
-            ━━━━━━━━━━━━━━━━━━━━━━
-            `v-status`  查看配置
-            `v-save`    保存当前配置
-            `v-cd`      切换目录
-            `v-block`   屏蔽关键词
-            `v-new`     新建会话
 
             *直接发送消息即可与 Claude 对话*
 
-            ---
+            ━━━━━━━━━━━━━━━━━━━━━━
+
+            **快速开始**
+            `v-config <key>` 一键配置
+            `v-switch <名称>` 切换配置
+            `v-help` 查看所有命令
+
+            **常用命令**
+            `v-status` 查看配置
+            `v-new` 新建会话
+
+            ━━━━━━━━━━━━━━━━━━━━━━
             *Copyright 2026 ChengXun*
             *GitHub: https://github.com/ChengXunX/vibe-wechat*
             """;
