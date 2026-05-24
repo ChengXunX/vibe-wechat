@@ -79,15 +79,13 @@ public class MessageRouter {
                 int count = getMessageCount(userId);
                 int max = filterConfig.getMaxMessagesPerUser();
 
-                // 检查是否已达到限制（预留最后一条给最终结果）
+                // 达到第9条时，发送警告并停止后续通知
                 if (count >= max - 1) {
-                    return; // 已达到限制，不发送工具通知
-                }
-
-                // 接近限制时发送警告
-                if (count == max - 2) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限，后续工具通知将被屏蔽", contextToken);
+                    if (count == max - 1) {
+                        String contextToken = userContextTokens.get(userId);
+                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
+                    }
+                    return;
                 }
 
                 // 根据配置决定是否发送工具调用通知
@@ -103,15 +101,13 @@ public class MessageRouter {
                 int count = getMessageCount(userId);
                 int max = filterConfig.getMaxMessagesPerUser();
 
-                // 检查是否已达到限制（预留最后一条给最终结果）
+                // 达到第9条时，发送警告并停止后续通知
                 if (count >= max - 1) {
+                    if (count == max - 1) {
+                        String contextToken = userContextTokens.get(userId);
+                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
+                    }
                     return;
-                }
-
-                // 接近限制时发送警告
-                if (count == max - 2) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限，后续通知将被屏蔽", contextToken);
                 }
 
                 // 工具结果通知（根据配置）
@@ -127,15 +123,13 @@ public class MessageRouter {
                 int count = getMessageCount(userId);
                 int max = filterConfig.getMaxMessagesPerUser();
 
-                // 检查是否已达到限制（预留最后一条给最终结果）
+                // 达到第9条时，发送警告并停止后续通知
                 if (count >= max - 1) {
+                    if (count == max - 1) {
+                        String contextToken = userContextTokens.get(userId);
+                        ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + max + "），后续通知将被屏蔽", contextToken);
+                    }
                     return;
-                }
-
-                // 接近限制时发送警告
-                if (count == max - 2) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限，后续通知将被屏蔽", contextToken);
                 }
 
                 // 子任务状态通知（根据配置）
@@ -170,7 +164,7 @@ public class MessageRouter {
         // 发送输入状态
         ilinkService.sendTyping(userId);
 
-        // 如果开启了消息状态通知，发送确认消息（不计入次数）
+        // 如果开启了消息状态通知，发送确认消息（计入次数）
         if (filterConfig.isShowMessageStatus()) {
             String sessionId = claudeApiService.getSessionId(userId);
             String model = claudeApiService.getModel();
@@ -186,8 +180,6 @@ public class MessageRouter {
                 workDir
             );
             ilinkService.sendText(userId, statusMsg, contextToken);
-            // 状态通知不计入次数
-            messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).decrementAndGet();
         }
 
         long startTime = System.currentTimeMillis();
