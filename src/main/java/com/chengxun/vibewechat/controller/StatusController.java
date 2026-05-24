@@ -34,8 +34,8 @@ public class StatusController {
 
     @GetMapping("/qrcode")
     public String qrcode() throws WriterException, IOException {
-        // ilink 二维码登录 URL
-        String qrContent = ilinkBaseUrl + "/cgi-bin/mmchatbotlogin?action=getqrcode&bot_token=" + botToken;
+        // ilink 二维码登录 URL - 使用正确的 API 格式
+        String qrContent = ilinkBaseUrl + "/cgi-bin/mmchatbotlogin?action=getqrcode&bot_token=" + botToken + "&response_type=code";
         String qrBase64 = QRCodeGenerator.generateBase64(qrContent, 300, 300);
         String status = ilinkService.isConnected() ? "已连接" : "未连接";
         return "<!DOCTYPE html>" +
