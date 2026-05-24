@@ -1,9 +1,11 @@
 package com.chengxun.vibewechat.controller;
 
+import com.chengxun.vibewechat.config.ClaudeConfig;
 import com.chengxun.vibewechat.service.IlInkService;
 import com.google.zxing.WriterException;
 import com.chengxun.vibewechat.util.QRCodeGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -16,6 +18,12 @@ public class StatusController {
     @Autowired
     private IlInkService ilinkService;
 
+    @Value("${vibe-wechat.ilink.base-url:https://ilinkai.weixin.qq.com}")
+    private String ilinkBaseUrl;
+
+    @Value("${vibe-wechat.ilink.bot-token:}")
+    private String botToken;
+
     @GetMapping("/status")
     public Map<String, Object> status() {
         return Map.of(
@@ -26,7 +34,8 @@ public class StatusController {
 
     @GetMapping("/qrcode")
     public String qrcode() throws WriterException, IOException {
-        String qrContent = "https://ilink.example.com/connect";
+        // ilink 二维码登录 URL
+        String qrContent = ilinkBaseUrl + "/cgi-bin/mmchatbotlogin?action=getqrcode&bot_token=" + botToken;
         String qrBase64 = QRCodeGenerator.generateBase64(qrContent, 300, 300);
         String status = ilinkService.isConnected() ? "已连接" : "未连接";
         return "<!DOCTYPE html>" +

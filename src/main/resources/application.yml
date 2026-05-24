@@ -14,8 +14,8 @@ vibe-wechat:
     model: claude-sonnet-4-20250514
     max-tokens: 4096
   ilink:
-    host: localhost
-    port: 9090
+    base-url: https://ilinkai.weixin.qq.com
+    bot-token: ${ILINK_BOT_TOKEN:}
   filter:
     show-tool-calls: false
     show-file-read: false
