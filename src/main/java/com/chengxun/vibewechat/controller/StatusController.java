@@ -14,6 +14,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+
+import jakarta.annotation.PostConstruct;
 import java.util.Map;
 
 @RestController
@@ -24,6 +26,10 @@ public class StatusController {
 
     @Value("${vibe-wechat.ilink.base-url:https://ilinkai.weixin.qq.com}")
     private String ilinkBaseUrl;
+
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
 
     @GetMapping("/status")
     public Map<String, Object> status() {
@@ -49,17 +55,13 @@ public class StatusController {
     public String qrcode() throws Exception {
         String apiUrl = ilinkBaseUrl + "/ilink/bot/get_bot_qrcode?bot_type=3";
 
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .build();
-
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(apiUrl))
                 .GET()
                 .timeout(Duration.ofSeconds(10))
                 .build();
 
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         String qrcode = "";
         String rawResponse = response.body();
@@ -135,10 +137,6 @@ public class StatusController {
         try {
             String apiUrl = ilinkBaseUrl + "/ilink/bot/get_qrcode_status?qrcode=" + qrcode;
 
-            HttpClient client = HttpClient.newBuilder()
-                    .connectTimeout(Duration.ofSeconds(10))
-                    .build();
-
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl))
                     .header("iLink-App-ClientVersion", "1")
@@ -146,7 +144,7 @@ public class StatusController {
                     .timeout(Duration.ofSeconds(35))
                     .build();
 
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() == 200) {
                 String body = response.body();

@@ -28,6 +28,7 @@ public class IlInkConnectionHandler {
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     private ScheduledExecutorService scheduler;
     private String botToken = "";
 
@@ -112,8 +113,7 @@ public class IlInkConnectionHandler {
             String body = response.body();
             if (body != null && !body.isEmpty()) {
                 try {
-                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                    com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(body);
+                    com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(body);
 
                     // 更新 get_updates_buf
                     com.fasterxml.jackson.databind.JsonNode bufNode = root.get("get_updates_buf");

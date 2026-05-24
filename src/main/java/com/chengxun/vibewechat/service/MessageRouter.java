@@ -59,6 +59,7 @@ public class MessageRouter {
     private static final String V_SAVE = "v-save";
     private static final String V_PROFILES = "v-profiles";
     private static final String V_THINKING = "v-thinking";
+    private static final String V_DELETE = "v-delete";
 
     // 存储用户ID到contextToken的映射
     private final Map<String, String> userContextTokens = new ConcurrentHashMap<>();
@@ -232,6 +233,7 @@ public class MessageRouter {
             case V_SAVE -> handleSaveCommand(userId, parts, contextToken);
             case V_PROFILES -> handleProfilesCommand(userId, parts, contextToken);
             case V_THINKING -> handleThinkingCommand(userId, parts, contextToken);
+            case V_DELETE -> handleDeleteSessionCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -297,6 +299,7 @@ public class MessageRouter {
                 `v-clear`         清空会话
                 `v-sessions`      列出会话
                 `v-session <id>`  切换会话
+                `v-delete <id>`   删除会话
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
@@ -367,6 +370,20 @@ public class MessageRouter {
                 filterConfig.getMaxMessagesPerUser(),
                 claudeApiService.getTokenUsageSummary(userId));
         ilinkService.sendText(userId, status, contextToken);
+    }
+
+    private void handleDeleteSessionCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-delete <session_id>", contextToken);
+            return;
+        }
+
+        String sessionId = parts[1];
+        if (claudeApiService.deleteSession(userId, sessionId)) {
+            ilinkService.sendText(userId, "已删除会话: " + sessionId, contextToken);
+        } else {
+            ilinkService.sendText(userId, "未找到会话: " + sessionId + "\n使用 v-sessions 查看可用会话", contextToken);
+        }
     }
 
     private void handleFilterCommand(String userId, String[] parts, String contextToken) {

@@ -30,6 +30,7 @@ public class ClaudeApiService {
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     @PostConstruct
     public void init() {
@@ -197,8 +198,7 @@ public class ClaudeApiService {
 
                     // 尝试解析 stream-json 格式
                     try {
-                        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-                        com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(line);
+                        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
 
                         String type = node.get("type").asText();
 
@@ -296,8 +296,7 @@ public class ClaudeApiService {
     private String parseJsonResponse(String userId, String json) {
         try {
             // 使用 Jackson 解析 JSON
-            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(json);
 
             // 获取 result 字段
             String result = root.get("result").asText();
@@ -368,6 +367,18 @@ public class ClaudeApiService {
         List<String> history = sessionHistory.get(userId);
         if (history != null && history.contains(sessionId)) {
             sessionIds.put(userId, sessionId);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean deleteSession(String userId, String sessionId) {
+        List<String> history = sessionHistory.get(userId);
+        if (history != null && history.remove(sessionId)) {
+            // 如果删除的是当前会话，清除当前会话
+            if (sessionId.equals(sessionIds.get(userId))) {
+                sessionIds.remove(userId);
+            }
             return true;
         }
         return false;
