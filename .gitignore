@@ -41,3 +41,6 @@ node_modules/
 # Config files (may contain API keys)
 vibe-wechat-config.json
 *.config.json
+vibe-wechat-config.json
+*.pid
+*.log
