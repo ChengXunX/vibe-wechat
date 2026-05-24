@@ -78,19 +78,11 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                // 先递增计数器
-                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
-                log.info("Tool callback: userId={}, toolName={}, count={}, max={}", userId, toolName, count, MESSAGE_LIMIT);
+                // 不递增计数器，只读取当前计数
+                int count = getMessageCount(userId);
+                log.info("Tool callback: userId={}, toolName={}, count={}", userId, toolName, count);
 
-                // 达到第9条时，发送警告（只发一次）
-                if (count == MESSAGE_LIMIT - 1 && !warningSent.getOrDefault(userId, false)) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
-                    warningSent.put(userId, true);
-                    return;
-                }
-
-                // 达到第10条时，停止发送通知
+                // 达到限制时，停止发送通知
                 if (count >= MESSAGE_LIMIT) {
                     return;
                 }
@@ -111,18 +103,10 @@ public class MessageRouter {
 
             @Override
             public void onToolResult(String userId, String result) {
-                // 先递增计数器
-                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+                // 不递增计数器，只读取当前计数
+                int count = getMessageCount(userId);
 
-                // 达到第9条时，发送警告（只发一次）
-                if (count == MESSAGE_LIMIT - 1 && !warningSent.getOrDefault(userId, false)) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
-                    warningSent.put(userId, true);
-                    return;
-                }
-
-                // 达到第10条时，停止发送通知
+                // 达到限制时，停止发送通知
                 if (count >= MESSAGE_LIMIT) {
                     return;
                 }
@@ -137,18 +121,10 @@ public class MessageRouter {
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                // 先递增计数器
-                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+                // 不递增计数器，只读取当前计数
+                int count = getMessageCount(userId);
 
-                // 达到第9条时，发送警告（只发一次）
-                if (count == MESSAGE_LIMIT - 1 && !warningSent.getOrDefault(userId, false)) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
-                    warningSent.put(userId, true);
-                    return;
-                }
-
-                // 达到第10条时，停止发送通知
+                // 达到限制时，停止发送通知
                 if (count >= MESSAGE_LIMIT) {
                     return;
                 }
