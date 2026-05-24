@@ -76,9 +76,9 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                // 工具消息不计入消息次数，但如果已达到限制则不发送通知
-                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return;
+                // 检查是否已达到限制（预留最后一条给最终结果）
+                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser() - 1) {
+                    return; // 已达到限制，不发送工具通知
                 }
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
@@ -90,8 +90,8 @@ public class MessageRouter {
 
             @Override
             public void onToolResult(String userId, String result) {
-                // 工具结果不计入消息次数，但如果已达到限制则不发送通知
-                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
+                // 检查是否已达到限制（预留最后一条给最终结果）
+                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser() - 1) {
                     return;
                 }
                 // 工具结果通知（根据配置）
@@ -104,8 +104,8 @@ public class MessageRouter {
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                // 子任务状态不计入消息次数，但如果已达到限制则不发送通知
-                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
+                // 检查是否已达到限制（预留最后一条给最终结果）
+                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser() - 1) {
                     return;
                 }
                 // 子任务状态通知（根据配置）
@@ -196,13 +196,11 @@ public class MessageRouter {
                 String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
                 String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
 
-                // 检查是否接近消息限制
-                if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
-                    String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + fullResponse;
-                    ilinkService.sendText(userId, warning, contextToken);
-                } else {
-                    ilinkService.sendText(userId, fullResponse, contextToken);
-                }
+                // 无论是否达到限制，都发送最终结果（这是最后一条消息）
+                ilinkService.sendText(userId, fullResponse, contextToken);
+            } else if (blocked) {
+                // 如果被关键词屏蔽，发送提示
+                ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken);
             }
         } finally {
             // 停止 typing 刷新线程
