@@ -6,9 +6,9 @@ import com.chengxun.vibewechat.util.QRCodeGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -35,7 +35,6 @@ public class StatusController {
 
     @GetMapping("/qrcode")
     public String qrcode() throws Exception {
-        // 使用正确的 ilink API 获取二维码
         String apiUrl = ilinkBaseUrl + "/ilink/bot/get_bot_qrcode?bot_type=3";
 
         HttpClient client = HttpClient.newBuilder()
@@ -54,7 +53,6 @@ public class StatusController {
         String rawResponse = response.body();
 
         if (response.statusCode() == 200 && rawResponse != null && !rawResponse.isEmpty()) {
-            // 提取 qrcode token
             int start = rawResponse.indexOf("\"qrcode\":\"") + 10;
             int end = rawResponse.indexOf("\"", start);
             if (start > 9 && end > start) {
@@ -65,7 +63,6 @@ public class StatusController {
         String status = ilinkService.isConnected() ? "已连接" : "未连接";
 
         if (!qrcode.isEmpty()) {
-            // 使用 qrcode_img_content 生成二维码图片
             String qrImgUrl = "https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=" + qrcode + "&bot_type=3";
             String qrBase64 = QRCodeGenerator.generateBase64(qrImgUrl, 300, 300);
 
@@ -89,5 +86,48 @@ public class StatusController {
                    "<p>API 响应:</p><pre>" + rawResponse + "</pre>" +
                    "<p>服务状态: " + status + "</p></body></html>";
         }
+    }
+
+    @GetMapping("/callback")
+    public Map<String, String> callback(@RequestParam String qrcode) {
+        // 轮询二维码扫描状态
+        try {
+            String apiUrl = ilinkBaseUrl + "/ilink/bot/get_qrcode_status?qrcode=" + qrcode;
+
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .header("iLink-App-ClientVersion", "1")
+                    .GET()
+                    .timeout(Duration.ofSeconds(35))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                String body = response.body();
+                // 提取 bot_token
+                int start = body.indexOf("\"bot_token\":\"") + 13;
+                int end = body.indexOf("\"", start);
+                if (start > 12 && end > start) {
+                    String botToken = body.substring(start, end);
+                    ilinkService.setBotToken(botToken);
+                    return Map.of("status", "confirmed", "bot_token", botToken);
+                }
+                // 提取状态
+                start = body.indexOf("\"status\":\"") + 10;
+                end = body.indexOf("\"", start);
+                if (start > 9 && end > start) {
+                    String status = body.substring(start, end);
+                    return Map.of("status", status);
+                }
+            }
+        } catch (Exception e) {
+            return Map.of("status", "error", "message", e.getMessage());
+        }
+        return Map.of("status", "wait");
     }
 }

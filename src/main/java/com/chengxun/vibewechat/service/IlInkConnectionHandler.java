@@ -20,11 +20,8 @@ import java.util.function.Consumer;
 @Component
 public class IlInkConnectionHandler {
 
-    @Value("${vibe-wechat.ilink.base-url:https://api.ilink.bot}")
+    @Value("${vibe-wechat.ilink.base-url:https://ilinkai.weixin.qq.com}")
     private String baseUrl;
-
-    @Value("${vibe-wechat.ilink.bot-token:}")
-    private String botToken;
 
     private volatile boolean connected = false;
     private Consumer<String> messageHandler;
@@ -32,13 +29,11 @@ public class IlInkConnectionHandler {
             .connectTimeout(Duration.ofSeconds(10))
             .build();
     private ScheduledExecutorService scheduler;
-    private String lastMessageId = "";
+    private String botToken = "";
 
     @PostConstruct
     public void init() {
-        if (botToken != null && !botToken.isEmpty()) {
-            startPolling();
-        }
+        log.info("ilink base URL: {}", baseUrl);
     }
 
     @PreDestroy
@@ -49,7 +44,22 @@ public class IlInkConnectionHandler {
         }
     }
 
+    public void setBotToken(String token) {
+        this.botToken = token;
+        if (token != null && !token.isEmpty()) {
+            startPolling();
+        }
+    }
+
+    public String getBotToken() {
+        return botToken;
+    }
+
     private void startPolling() {
+        if (scheduler != null) {
+            scheduler.shutdown();
+        }
+
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "ilink-poller");
             t.setDaemon(true);
@@ -90,22 +100,67 @@ public class IlInkConnectionHandler {
     }
 
     public void sendText(String userId, String text) {
-        if (!connected) {
+        if (!connected || botToken.isEmpty()) {
             log.warn("Not connected to ilink");
             return;
         }
-        // TODO: 使用 ilink API 发送消息
-        log.info("Send to {}: {}", userId, text);
+        try {
+            String url = baseUrl + "/ilink/bot/sendmessage";
+            String jsonBody = String.format("{\"content\":\"%s\",\"user_id\":\"%s\"}", text, userId);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + botToken)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .timeout(Duration.ofSeconds(10))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            log.debug("Send message response: {}", response.statusCode());
+        } catch (Exception e) {
+            log.error("Failed to send message", e);
+        }
     }
 
     public void sendTyping(String userId) {
-        if (!connected) return;
-        log.debug("Typing to {}", userId);
+        if (!connected || botToken.isEmpty()) return;
+        try {
+            String url = baseUrl + "/ilink/bot/send_typing";
+            String jsonBody = String.format("{\"user_id\":\"%s\",\"status\":1}", userId);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + botToken)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .timeout(Duration.ofSeconds(5))
+                    .build();
+
+            httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            log.debug("Failed to send typing status", e);
+        }
     }
 
     public void sendStopTyping(String userId) {
-        if (!connected) return;
-        log.debug("Stop typing to {}", userId);
+        if (!connected || botToken.isEmpty()) return;
+        try {
+            String url = baseUrl + "/ilink/bot/send_typing";
+            String jsonBody = String.format("{\"user_id\":\"%s\",\"status\":0}", userId);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + botToken)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .timeout(Duration.ofSeconds(5))
+                    .build();
+
+            httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            log.debug("Failed to send stop typing status", e);
+        }
     }
 
     public boolean isConnected() {

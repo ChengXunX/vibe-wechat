@@ -98,6 +98,10 @@ public class IlInkService {
         return connectionHandler.isConnected();
     }
 
+    public void setBotToken(String token) {
+        connectionHandler.setBotToken(token);
+    }
+
     public static class IlInkMessageEvent {
         private final String userId;
         private final String content;
