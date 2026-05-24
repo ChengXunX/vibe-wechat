@@ -98,6 +98,13 @@ public class IlInkConnectionHandler {
         channel.writeAndFlush(message);
     }
 
+    public void sendStopTyping(String userId) {
+        if (!connected || channel == null) return;
+        // TODO: 停止输入状态
+        String message = buildStopTypingMessage(userId);
+        channel.writeAndFlush(message);
+    }
+
     private String buildTextMessage(String userId, String text) {
         // ilink 消息协议格式（示例）
         return String.format("{\"type\":\"text\",\"user\":\"%s\",\"content\":\"%s\"}", userId, text);
@@ -105,6 +112,10 @@ public class IlInkConnectionHandler {
 
     private String buildTypingMessage(String userId) {
         return String.format("{\"type\":\"typing\",\"user\":\"%s\"}", userId);
+    }
+
+    private String buildStopTypingMessage(String userId) {
+        return String.format("{\"type\":\"stop_typing\",\"user\":\"%s\"}", userId);
     }
 
     public boolean isConnected() {

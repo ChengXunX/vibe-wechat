@@ -69,6 +69,10 @@ public class MessageRouter {
 
         // 转发给 Claude
         String response = claudeApiService.sendMessage(userId, message);
+
+        // 停止输入状态
+        ilinkService.sendStopTyping(userId);
+
         if (response != null && !response.isEmpty()) {
             ilinkService.sendText(userId, response);
         }

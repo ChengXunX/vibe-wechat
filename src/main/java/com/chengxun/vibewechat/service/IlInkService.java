@@ -31,6 +31,10 @@ public class IlInkService {
         connectionHandler.sendTyping(userId);
     }
 
+    public void sendStopTyping(String userId) {
+        connectionHandler.sendStopTyping(userId);
+    }
+
     public boolean isConnected() {
         return connectionHandler.isConnected();
     }
