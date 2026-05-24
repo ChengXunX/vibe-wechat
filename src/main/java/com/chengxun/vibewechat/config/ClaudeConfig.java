@@ -12,5 +12,7 @@ public class ClaudeConfig {
     private String apiUrl = "https://api.anthropic.com";
     private String model = "claude-sonnet-4-20250514";
     private int maxTokens = 4096;
-    private String installPath = ""; // Claude 安装路径
+    private String installPath = "";
+    private boolean thinkingEnabled = false;
+    private int thinkingBudgetTokens = 10000;
 }

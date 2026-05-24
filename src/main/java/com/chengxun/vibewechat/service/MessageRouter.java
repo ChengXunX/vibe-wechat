@@ -62,6 +62,7 @@ public class MessageRouter {
     private static final String V_SWITCH = "v-switch";
     private static final String V_SAVE = "v-save";
     private static final String V_PROFILES = "v-profiles";
+    private static final String V_THINKING = "v-thinking";
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -105,12 +106,23 @@ public class MessageRouter {
             // 转发给 Claude
             String response = claudeApiService.sendMessage(userId, message);
 
-            // 检查是否接近消息限制，添加提示
-            if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
-                String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + response;
-                ilinkService.sendText(userId, warning, contextToken);
-            } else if (response != null && !response.isEmpty()) {
-                ilinkService.sendText(userId, response, contextToken);
+            // 检查是否包含屏蔽关键词
+            boolean blocked = false;
+            for (String keyword : filterConfig.getBlockedKeywords()) {
+                if (response != null && response.contains(keyword)) {
+                    blocked = true;
+                    break;
+                }
+            }
+
+            if (!blocked) {
+                // 检查是否接近消息限制，添加提示
+                if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
+                    String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + response;
+                    ilinkService.sendText(userId, warning, contextToken);
+                } else if (response != null && !response.isEmpty()) {
+                    ilinkService.sendText(userId, response, contextToken);
+                }
             }
         } finally {
             // 无论如何都停止输入状态
@@ -147,6 +159,7 @@ public class MessageRouter {
             case V_SWITCH -> handleSwitchCommand(userId, parts, contextToken);
             case V_SAVE -> handleSaveCommand(userId, parts, contextToken);
             case V_PROFILES -> handleProfilesCommand(userId, parts, contextToken);
+            case V_THINKING -> handleThinkingCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -155,7 +168,7 @@ public class MessageRouter {
         String help = """
                 **📋 vibe-wechat 命令列表**
 
-                *微信限制每条消息最多回复10次，可通过 v-limit 设置*
+                *微信限制每条用户消息24h内最多回复10条，v-limit 设置内部限制*
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 `v-help`          显示此帮助
@@ -164,7 +177,7 @@ public class MessageRouter {
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **🔧 Claude 配置**
                 ━━━━━━━━━━━━━━━━━━━━━━
-                `v-config <key> [model]` 一键配置
+                `v-config <key> [url] [model]` 一键配置
                 `v-switch <name>`  切换预设配置
                 `v-save <name>`    保存当前配置
                 `v-profiles`       列出所有预设
@@ -172,6 +185,7 @@ public class MessageRouter {
                 `v-key <key>`      设置 API Key
                 `v-model <name>`   设置模型
                 `v-claude <path>`  设置安装路径
+                `v-thinking`       开关推理模式
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **📁 工作目录**
@@ -187,17 +201,20 @@ public class MessageRouter {
                 `v-filter <key> <value>`  高级过滤
 
                 ━━━━━━━━━━━━━━━━━━━━━━
-                **🚫 关键词屏蔽**
+                **🚫 关键词过滤**
                 ━━━━━━━━━━━━━━━━━━━━━━
-                `v-block <词>`    添加屏蔽关键词
-                `v-unblock <词>`  移除屏蔽关键词
+                `v-block <词>`    添加过滤关键词
+                `v-unblock <词>`  移除过滤关键词
+                *包含关键词的回复不发送，节省微信通知次数*
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **📊 消息配置**
                 ━━━━━━━━━━━━━━━━━━━━━━
-                `v-limit <n>`     每小时消息数
+                `v-limit <n>`     本账号内部消息数限制
                 `v-token`         Token 使用统计
-                `v-notify`        收到消息时发送状态通知
+                `v-notify`        收到消息时发送处理确认
+                `v-notify true`   开启状态通知（含会话ID、模型等）
+                `v-notify false`  关闭状态通知（仅显示输入中）
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **💬 会话管理**
@@ -601,6 +618,31 @@ public class MessageRouter {
         ilinkService.sendText(userId, "消息状态通知已设置为: " + (value ? "开启" : "关闭"), contextToken);
     }
 
+    private void handleThinkingCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            String status = claudeApiService.isThinkingEnabled() ? "开启" : "关闭";
+            int budget = claudeApiService.getThinkingBudgetTokens();
+            ilinkService.sendText(userId, "用法: v-thinking true/false [budget]\n当前状态: " + status + "\n推理预算: " + budget + " tokens", contextToken);
+            return;
+        }
+
+        boolean value = Boolean.parseBoolean(parts[1].toLowerCase());
+        claudeApiService.setThinkingEnabled(value);
+
+        if (parts.length > 2) {
+            try {
+                int budget = Integer.parseInt(parts[2]);
+                claudeApiService.setThinkingBudgetTokens(budget);
+            } catch (NumberFormatException e) {
+                ilinkService.sendText(userId, "无效的预算数量: " + parts[2], contextToken);
+                return;
+            }
+        }
+
+        configService.saveConfig();
+        ilinkService.sendText(userId, "推理模式已设置为: " + (value ? "开启" : "关闭"), contextToken);
+    }
+
     private void handleCdCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
             String currentDir = System.getProperty("user.dir");
@@ -624,27 +666,29 @@ public class MessageRouter {
             String help = """
                     **一键配置 Claude**
 
-                    用法: `v-config <api_key> [model]`
+                    用法: `v-config <api_key> [api_url] [model]`
 
                     示例:
                     `v-config sk-xxx1234567890`
-                    `v-config sk-xxx1234567890 claude-sonnet-4-20250514`
+                    `v-config sk-xxx1234567890 https://api.anthropic.com`
+                    `v-config sk-xxx1234567890 https://api.anthropic.com claude-sonnet-4-20250514`
 
                     说明:
                     - 第一个参数为 API Key（必填）
-                    - 第二个参数为模型名称（可选，默认: claude-sonnet-4-20250514）
+                    - 第二个参数为 API 地址（可选，默认: https://api.anthropic.com）
+                    - 第三个参数为模型名称（可选）
                     """;
             ilinkService.sendText(userId, help, contextToken);
             return;
         }
 
         String apiKey = parts[1];
-        String model = parts.length > 2 ? parts[2] : "claude-sonnet-4-20250514";
+        String apiUrl = parts.length > 2 ? parts[2] : "https://api.anthropic.com";
+        String model = parts.length > 3 ? parts[3] : "claude-sonnet-4-20250514";
 
-        // 设置 API Key
+        // 设置配置
         claudeApiService.setApiKey(apiKey);
-
-        // 设置模型
+        claudeApiService.setApiUrl(apiUrl);
         claudeApiService.setModel(model);
 
         // 更新 Claude 配置文件

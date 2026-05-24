@@ -1,0 +1,23 @@
+{
+  "filter" : {
+    "maxMessagesPerUser" : 999,
+    "showTokenUsage" : true,
+    "showToolCalls" : false,
+    "showMessageStatus" : false,
+    "showFileOperations" : false,
+    "showFileRead" : false,
+    "blockedKeywords" : [ ],
+    "showTaskDuration" : true,
+    "showResultsOnly" : true,
+    "showTaskCompletion" : true,
+    "showFileEdit" : false,
+    "showDecisionsOnly" : true,
+    "showSubtaskCompletion" : true
+  },
+  "claude" : {
+    "installPath" : "/usr/bin/claude",
+    "apiUrl" : "https://token-plan-cn.xiaomimimo.com/anthropic",
+    "apiKey" : "tp-cbisnd3ew8ek4y0ti5fyyqxb9af9b4tfas6q0b9ten21ravy",
+    "model" : "mimo-v2.5[1m]"
+  }
+}

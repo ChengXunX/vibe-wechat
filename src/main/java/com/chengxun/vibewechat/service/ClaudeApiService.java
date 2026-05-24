@@ -224,6 +224,13 @@ public class ClaudeApiService {
         sb.append("{");
         sb.append("\"model\":\"").append(escapeJson(claudeConfig.getModel())).append("\",");
         sb.append("\"max_tokens\":").append(claudeConfig.getMaxTokens()).append(",");
+
+        // 添加 thinking 模式支持
+        if (claudeConfig.isThinkingEnabled()) {
+            sb.append("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":")
+              .append(claudeConfig.getThinkingBudgetTokens()).append("},");
+        }
+
         sb.append("\"messages\":[");
         for (int i = 0; i < messages.size(); i++) {
             Map<String, String> msg = messages.get(i);
@@ -268,4 +275,8 @@ public class ClaudeApiService {
     public void setModel(String model) { claudeConfig.setModel(model); }
     public String getInstallPath() { return claudeConfig.getInstallPath(); }
     public void setInstallPath(String path) { claudeConfig.setInstallPath(path); }
+    public boolean isThinkingEnabled() { return claudeConfig.isThinkingEnabled(); }
+    public void setThinkingEnabled(boolean enabled) { claudeConfig.setThinkingEnabled(enabled); }
+    public int getThinkingBudgetTokens() { return claudeConfig.getThinkingBudgetTokens(); }
+    public void setThinkingBudgetTokens(int budget) { claudeConfig.setThinkingBudgetTokens(budget); }
 }
