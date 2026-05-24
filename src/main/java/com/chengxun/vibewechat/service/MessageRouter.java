@@ -183,9 +183,11 @@ public class MessageRouter {
             }
 
             if (!blocked && response != null && !response.isEmpty()) {
-                // 添加耗时和 token 统计到响应末尾
+                // 生成任务摘要
+                String taskSummary = generateTaskSummary(message);
+                // 添加完成标记、任务摘要、耗时和 token 统计
                 String summary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                String fullResponse = response + "\n\n" + summary;
+                String fullResponse = "✅ 任务完成\n---\n" + taskSummary + "\n\n" + response + "\n\n" + summary;
 
                 // 检查是否接近消息限制
                 if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
@@ -902,5 +904,32 @@ public class MessageRouter {
 
     private boolean isNearLimit(String userId) {
         return getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser() - 1;
+    }
+
+    private String generateTaskSummary(String message) {
+        // 从用户消息中提取简要任务描述
+        String lowerMsg = message.toLowerCase();
+
+        if (lowerMsg.contains("分析") || lowerMsg.contains("分析一下") || lowerMsg.contains("analyze")) {
+            return "📊 任务: 分析项目";
+        } else if (lowerMsg.contains("修复") || lowerMsg.contains("fix") || lowerMsg.contains("bug")) {
+            return "🔧 任务: 修复问题";
+        } else if (lowerMsg.contains("创建") || lowerMsg.contains("新建") || lowerMsg.contains("create")) {
+            return "📝 任务: 创建内容";
+        } else if (lowerMsg.contains("删除") || lowerMsg.contains("remove") || lowerMsg.contains("delete")) {
+            return "🗑️ 任务: 删除内容";
+        } else if (lowerMsg.contains("修改") || lowerMsg.contains("更新") || lowerMsg.contains("update") || lowerMsg.contains("modify")) {
+            return "✏️ 任务: 修改内容";
+        } else if (lowerMsg.contains("查看") || lowerMsg.contains("查询") || lowerMsg.contains("check") || lowerMsg.contains("query")) {
+            return "🔍 任务: 查看信息";
+        } else if (lowerMsg.contains("运行") || lowerMsg.contains("执行") || lowerMsg.contains("run") || lowerMsg.contains("execute")) {
+            return "▶️ 任务: 执行操作";
+        } else if (lowerMsg.contains("配置") || lowerMsg.contains("设置") || lowerMsg.contains("config") || lowerMsg.contains("set")) {
+            return "⚙️ 任务: 配置设置";
+        } else {
+            // 截取消息前20个字符作为摘要
+            String summary = message.length() > 20 ? message.substring(0, 20) + "..." : message;
+            return "💬 任务: " + summary;
+        }
     }
 }
