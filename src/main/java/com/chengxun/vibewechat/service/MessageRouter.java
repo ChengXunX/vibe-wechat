@@ -76,9 +76,9 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                // 工具消息不计入消息限制，但检查是否已达到限制
+                // 检查消息限制
                 if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return; // 已达到限制，不发送工具通知
+                    return; // 已达到限制，不发送
                 }
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
@@ -95,9 +95,9 @@ public class MessageRouter {
 
             @Override
             public void onToolResult(String userId, String result) {
-                // 工具结果不计入消息限制，但检查是否已达到限制
+                // 检查消息限制
                 if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return; // 已达到限制，不发送工具结果
+                    return; // 已达到限制，不发送
                 }
                 // 工具结果通知（根据配置）
                 if (filterConfig.isShowToolCalls()) {
@@ -109,9 +109,9 @@ public class MessageRouter {
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                // 子任务状态不计入消息限制，但检查是否已达到限制
+                // 检查消息限制
                 if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return; // 已达到限制，不发送子任务状态
+                    return; // 已达到限制，不发送
                 }
                 // 子任务状态通知（根据配置）
                 if (filterConfig.isShowSubtaskStatus()) {
@@ -199,7 +199,7 @@ public class MessageRouter {
                 String taskSummary = claudeApiService.getTaskSummary(userId, message);
                 // 添加完成标记、任务摘要、耗时和 token 统计
                 String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                String fullResponse = "✅ 任务完成\n---\n" + taskSummary + "\n\n" + response + "\n\n" + statsSummary;
+                String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
 
                 // 检查是否接近消息限制
                 if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
