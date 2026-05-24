@@ -76,6 +76,13 @@ public class MessageRouter {
             return;
         }
 
+        // 检查是否为彩蛋关键词
+        String easterEgg = checkEasterEgg(message);
+        if (easterEgg != null) {
+            ilinkService.sendText(userId, easterEgg, contextToken);
+            return;
+        }
+
         // 检查消息限制
         if (!checkMessageLimit(userId)) {
             ilinkService.sendText(userId, "消息次数已达上限，请稍后再试", contextToken);
@@ -102,6 +109,8 @@ public class MessageRouter {
             ilinkService.sendText(userId, statusMsg, contextToken);
         }
 
+        long startTime = System.currentTimeMillis();
+
         try {
             // 转发给 Claude
             String response = claudeApiService.sendMessage(userId, message);
@@ -118,7 +127,9 @@ public class MessageRouter {
             if (!blocked) {
                 // 检查是否接近消息限制，添加提示
                 if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
-                    String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + response;
+                    long duration = System.currentTimeMillis() - startTime;
+                    String summary = claudeApiService.getTaskCompletionSummary(userId, duration);
+                    String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + response + "\n\n" + summary;
                     ilinkService.sendText(userId, warning, contextToken);
                 } else if (response != null && !response.isEmpty()) {
                     ilinkService.sendText(userId, response, contextToken);
@@ -641,6 +652,30 @@ public class MessageRouter {
 
         configService.saveConfig();
         ilinkService.sendText(userId, "推理模式已设置为: " + (value ? "开启" : "关闭"), contextToken);
+    }
+
+    private String checkEasterEgg(String message) {
+        String lower = message.toLowerCase();
+        String[] whoKeywords = {"你是谁", "你叫什么", "what are you", "who are you", "what's your name"};
+        String[] helloKeywords = {"你好", "hello", "hi", "hey", "嗨", "在吗", "在不在"};
+
+        for (String keyword : whoKeywords) {
+            if (lower.contains(keyword)) {
+                return "我是 **Vibe We Chat**，一个微信 ilink 机器人中间件，可以连接 Claude 进行对话。\n\n" +
+                       "*由 ChengXun 开发*\n" +
+                       "*GitHub: https://github.com/ChengXunX/vibe-wechat*";
+            }
+        }
+
+        for (String keyword : helloKeywords) {
+            if (lower.contains(keyword)) {
+                return "你好！我是 **Vibe We Chat** 🤖\n\n" +
+                       "我可以帮你连接 Claude 进行对话，发送 `v-help` 查看所有命令。\n\n" +
+                       "*GitHub: https://github.com/ChengXunX/vibe-wechat*";
+            }
+        }
+
+        return null;
     }
 
     private void handleCdCommand(String userId, String[] parts, String contextToken) {

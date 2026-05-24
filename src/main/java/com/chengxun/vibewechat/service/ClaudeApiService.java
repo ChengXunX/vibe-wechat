@@ -168,15 +168,7 @@ public class ClaudeApiService {
                 // 解析 token 使用量
                 parseTokenUsage(userId, response.body());
 
-                // 获取 token 使用信息
-                TokenUsage usage = tokenUsageMap.get(userId);
-                String usageStr = "";
-                if (usage != null) {
-                    usageStr = String.format("\n\n---\n📊 Token: %d in / %d out | ⏱️ %dms",
-                            usage.inputTokens, usage.outputTokens, duration);
-                }
-
-                return assistantMessage + usageStr;
+                return assistantMessage;
             } else {
                 log.error("Claude API error: {} - {}", response.statusCode(), response.body());
                 return "Claude API 调用失败: " + response.statusCode();
@@ -209,6 +201,27 @@ public class ClaudeApiService {
         TokenUsage usage = getTokenUsage(userId);
         return String.format("输入: %d tokens, 输出: %d tokens, 总计: %d tokens",
                 usage.inputTokens, usage.outputTokens, usage.totalTokens);
+    }
+
+    public String getTaskCompletionSummary(String userId, long durationMs) {
+        TokenUsage usage = getTokenUsage(userId);
+        String duration = formatDuration(durationMs);
+        return String.format("---\n📊 Token: %d in / %d out | ⏱️ %s",
+                usage.inputTokens, usage.outputTokens, duration);
+    }
+
+    private String formatDuration(long ms) {
+        if (ms < 1000) {
+            return ms + "ms";
+        }
+        long seconds = ms / 1000;
+        long remainingMs = ms % 1000;
+        if (seconds < 60) {
+            return seconds + "s" + remainingMs + "ms";
+        }
+        long minutes = seconds / 60;
+        seconds = seconds % 60;
+        return minutes + "m" + seconds + "s" + remainingMs + "ms";
     }
 
     private void parseTokenUsage(String userId, String responseBody) {
