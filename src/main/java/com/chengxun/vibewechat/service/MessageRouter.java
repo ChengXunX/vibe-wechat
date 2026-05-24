@@ -111,39 +111,38 @@ public class MessageRouter {
 
     private void showHelp(String userId, String contextToken) {
         String help = """
-                vibe-wechat 命令列表:
+                **vibe-wechat 命令列表**
 
-                说明: 微信限制每条用户消息最多回复10次，
-                可通过 v-limit 设置内部限制（默认不限制）
+                *说明: 微信限制每条用户消息最多回复10次，可通过 v-limit 设置内部限制（默认不限制）*
 
-                v-help          显示此帮助
-                v-status        显示当前配置状态
+                `v-help`          显示此帮助
+                `v-status`        显示当前配置状态
 
-                --- Claude 配置 ---
-                v-api <url>     设置 Claude API 地址（默认: api.anthropic.com）
-                v-key <key>     设置 Claude API Key
-                v-model <name>  设置 Claude 模型（默认: claude-sonnet-4-20250514）
-                v-claude <path> 设置 Claude 安装路径
+                **Claude 配置**
+                `v-api <url>`     设置 Claude API 地址（默认: api.anthropic.com）
+                `v-key <key>`     设置 Claude API Key
+                `v-model <name>`  设置 Claude 模型（默认: claude-sonnet-4-20250514）
+                `v-claude <path>` 设置 Claude 安装路径
 
-                --- 快捷过滤 ---
-                v-tools         开关工具类消息（如grep、find等）
-                v-fileread      开关读取文件类消息（如Read、cat等）
-                v-fileedit      开关编辑文件类消息（如Edit、Write等）
+                **快捷过滤**
+                `v-tools`         开关工具类消息（如grep、find等）
+                `v-fileread`      开关读取文件类消息（如Read、cat等）
+                `v-fileedit`      开关编辑文件类消息（如Edit、Write等）
 
-                --- 高级过滤 ---
-                v-filter <key> <value>  配置消息过滤
+                **高级过滤**
+                `v-filter <key> <value>`  配置消息过滤
 
-                --- 消息配置 ---
-                v-limit <n>     设置每小时最大消息数（默认: 不限制）
-                v-token         查看/开关 token 消耗统计
+                **消息配置**
+                `v-limit <n>`     设置每小时最大消息数（默认: 不限制）
+                `v-token`         查看/开关 token 消耗统计
 
-                --- 会话管理 ---
-                v-new           新建 Claude 会话
-                v-clear         清空当前会话
-                v-sessions      列出会话
-                v-session <id>  切换会话
+                **会话管理**
+                `v-new`           新建 Claude 会话
+                `v-clear`         清空当前会话
+                `v-sessions`      列出会话
+                `v-session <id>`  切换会话
 
-                过滤配置项:
+                **过滤配置项**
                 - tools       工具调用 (true/false)
                 - fileread    读取文件 (true/false)
                 - fileedit    编辑文件 (true/false)

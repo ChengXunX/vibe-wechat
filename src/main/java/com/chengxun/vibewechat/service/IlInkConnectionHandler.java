@@ -139,7 +139,9 @@ public class IlInkConnectionHandler {
         try {
             String url = baseUrl + "/ilink/bot/sendmessage";
 
-            String escapedText = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+            // 格式化 markdown 为纯文本
+            String formattedText = formatMarkdown(text);
+            String escapedText = formattedText.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
             String contextTokenStr = (contextToken != null && !contextToken.isEmpty()) ?
                 String.format(",\"context_token\":\"%s\"", contextToken) : "";
 
@@ -166,6 +168,59 @@ public class IlInkConnectionHandler {
         } catch (Exception e) {
             log.error("Failed to send message", e);
         }
+    }
+
+    private String formatMarkdown(String text) {
+        if (text == null || text.isEmpty()) {
+            return text;
+        }
+
+        String result = text;
+
+        // 去除代码块
+        java.util.regex.Pattern codeBlockPattern = java.util.regex.Pattern.compile("```[\\s\\S]*?```");
+        java.util.regex.Matcher codeBlockMatcher = codeBlockPattern.matcher(result);
+        StringBuilder sb = new StringBuilder();
+        while (codeBlockMatcher.find()) {
+            String code = codeBlockMatcher.group();
+            code = code.substring(3, code.length() - 3);
+            int firstNewline = code.indexOf('\n');
+            if (firstNewline != -1) {
+                code = code.substring(firstNewline + 1);
+            }
+            codeBlockMatcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(code.trim()));
+        }
+        codeBlockMatcher.appendTail(sb);
+        result = sb.toString();
+
+        // 去除图片
+        result = result.replaceAll("!\\[.*?\\]\\(.*?\\)", "");
+
+        // 去除链接，保留文本
+        result = result.replaceAll("\\[([^\\]]+)\\]\\([^)]+\\)", "$1");
+
+        // 去除加粗
+        result = result.replaceAll("\\*\\*(.+?)\\*\\*", "$1");
+
+        // 去除删除线
+        result = result.replaceAll("~~(.+?)~~", "$1");
+
+        // 去除斜体（星号）
+        result = result.replaceAll("\\*(.+?)\\*", "$1");
+
+        // 去除斜体（下划线）
+        result = result.replaceAll("_(.+?)_", "$1");
+
+        // 去除行内代码
+        result = result.replaceAll("`(.+?)`", "$1");
+
+        // 去除标题
+        result = result.replaceAll("(?m)^#{1,6}\\s+", "");
+
+        // 去除水平线
+        result = result.replaceAll("(?m)^---+$", "---");
+
+        return result.strip();
     }
 
     public void sendTyping(String userId) {
