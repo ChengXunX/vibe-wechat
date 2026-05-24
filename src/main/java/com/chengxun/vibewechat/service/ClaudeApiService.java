@@ -129,6 +129,8 @@ public class ClaudeApiService {
         }
     }
 
+    private volatile long lastDurationMs = 0;
+
     public String sendMessage(String userId, String message) {
         String installPath = claudeConfig.getInstallPath();
         if (installPath == null || installPath.isEmpty()) {
@@ -142,6 +144,8 @@ public class ClaudeApiService {
             List<String> command = new ArrayList<>();
             command.add(installPath);
             command.add("--print");
+            command.add("--output-format");
+            command.add("json");
             command.add("--dangerously-skip-permissions");
 
             // 添加模型配置（支持 [1m] 等配置）
@@ -172,22 +176,21 @@ public class ClaudeApiService {
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 过滤 Claude CLI 的警告信息
-                    if (!line.startsWith("Warning:") && !line.startsWith("Error:")) {
-                        output.append(line).append("\n");
-                    }
+                    output.append(line).append("\n");
                 }
             }
 
             int exitCode = process.waitFor();
             long duration = System.currentTimeMillis() - startTime;
+            lastDurationMs = duration;
 
             String result = output.toString().trim();
 
             log.info("Claude CLI completed in {}ms, exit code: {}", duration, exitCode);
 
             if (exitCode == 0 && !result.isEmpty()) {
-                return result;
+                // 尝试解析 JSON 格式的响应
+                return parseJsonResponse(userId, result);
             } else if (exitCode != 0) {
                 log.error("Claude CLI exited with code: {}, output: {}", exitCode, result);
                 return "Claude 执行失败 (exit code: " + exitCode + ")\n" + result;
@@ -197,6 +200,56 @@ public class ClaudeApiService {
         } catch (Exception e) {
             log.error("Failed to execute Claude CLI", e);
             return "Claude 执行异常: " + e.getMessage();
+        }
+    }
+
+    private String parseJsonResponse(String userId, String json) {
+        try {
+            // 解析 JSON 响应
+            int resultStart = json.indexOf("\"result\":\"") + 10;
+            int resultEnd = json.indexOf("\"", resultStart);
+            if (resultStart > 9 && resultEnd > resultStart) {
+                String result = json.substring(resultStart, resultEnd);
+                // 处理 Unicode 转义
+                result = result.replace("\\n", "\n").replace("\\\"", "\"");
+                // 处理 Unicode surrogate pairs
+                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\\\u([0-9a-fA-F]{4})");
+                java.util.regex.Matcher matcher = pattern.matcher(result);
+                StringBuffer sb = new StringBuffer();
+                while (matcher.find()) {
+                    int codePoint = Integer.parseInt(matcher.group(1), 16);
+                    matcher.appendReplacement(sb, new String(Character.toChars(codePoint)));
+                }
+                matcher.appendTail(sb);
+                result = sb.toString();
+
+                // 解析 token 使用量
+                parseJsonTokenUsage(userId, json);
+
+                return result;
+            }
+        } catch (Exception e) {
+            log.error("Failed to parse JSON response", e);
+        }
+        return "解析响应失败";
+    }
+
+    private void parseJsonTokenUsage(String userId, String json) {
+        try {
+            int inputStart = json.indexOf("\"input_tokens\":") + 15;
+            int inputEnd = json.indexOf(",", inputStart);
+            if (inputStart > 14 && inputEnd > inputStart) {
+                int inputTokens = Integer.parseInt(json.substring(inputStart, inputEnd).trim());
+                int outputStart = json.indexOf("\"output_tokens\":", inputEnd) + 16;
+                int outputEnd = json.indexOf(",", outputStart);
+                if (outputStart > 15 && outputEnd > outputStart) {
+                    int outputTokens = Integer.parseInt(json.substring(outputStart, outputEnd).trim());
+                    TokenUsage usage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
+                    usage.add(inputTokens, outputTokens);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to parse token usage", e);
         }
     }
 
@@ -222,6 +275,10 @@ public class ClaudeApiService {
         TokenUsage usage = getTokenUsage(userId);
         return String.format("输入: %d tokens, 输出: %d tokens, 总计: %d tokens",
                 usage.inputTokens, usage.outputTokens, usage.totalTokens);
+    }
+
+    public long getLastDurationMs() {
+        return lastDurationMs;
     }
 
     public String getTaskCompletionSummary(String userId, long durationMs) {
