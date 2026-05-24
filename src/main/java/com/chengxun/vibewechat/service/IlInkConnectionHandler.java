@@ -95,7 +95,7 @@ public class IlInkConnectionHandler {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        if (response.statusCode() == 200 && messageHandler != null) {
+        if (response.statusCode() == 200) {
             String body = response.body();
             if (body != null && !body.isEmpty()) {
                 // 更新 get_updates_buf
@@ -107,9 +107,14 @@ public class IlInkConnectionHandler {
 
                 // 检查是否有消息
                 if (body.contains("\"msgs\"") && !body.contains("\"msgs\":[]")) {
-                    messageHandler.accept(body);
+                    log.info("Received messages, calling handler");
+                    if (messageHandler != null) {
+                        messageHandler.accept(body);
+                    }
                 }
             }
+        } else {
+            log.warn("Poll failed with status: {}", response.statusCode());
         }
     }
 
@@ -120,18 +125,25 @@ public class IlInkConnectionHandler {
         }
         try {
             String url = baseUrl + "/ilink/bot/sendmessage";
-            String jsonBody = String.format("{\"content\":\"%s\",\"user_id\":\"%s\"}", text, userId);
+
+            // 使用正确的 ilink 消息格式
+            String jsonBody = String.format(
+                "{\"msg\":{\"from_user_id\":\"\",\"to_user_id\":\"%s\",\"client_id\":\"%s\",\"message_type\":2,\"message_state\":2,\"item_list\":[{\"type\":1,\"text_item\":{\"text\":\"%s\"}}]}}",
+                userId,
+                java.util.UUID.randomUUID().toString(),
+                text.replace("\"", "\\\"").replace("\n", "\\n")
+            );
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + botToken)
+                    .header("iLink-App-ClientVersion", "1")
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .timeout(Duration.ofSeconds(10))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            log.debug("Send message response: {}", response.statusCode());
+            log.debug("Send message response: {} - {}", response.statusCode(), response.body());
         } catch (Exception e) {
             log.error("Failed to send message", e);
         }
