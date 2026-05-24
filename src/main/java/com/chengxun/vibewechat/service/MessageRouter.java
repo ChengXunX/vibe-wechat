@@ -176,6 +176,10 @@ public class MessageRouter {
             return;
         }
 
+        // 重置消息计数器（每次用户发新消息时重置）
+        messageCounts.put(userId, new AtomicInteger(0));
+        warningSent.put(userId, false);
+
         // 检查消息限制
         if (!checkMessageLimit(userId)) {
             ilinkService.sendText(userId, "消息次数已达上限，请稍后再试", contextToken);
