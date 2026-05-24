@@ -88,6 +88,9 @@ public class MessageRouter {
                     return;
                 }
 
+                // 计数+1
+                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
@@ -116,6 +119,9 @@ public class MessageRouter {
                     return;
                 }
 
+                // 计数+1
+                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+
                 // 工具结果通知（根据配置）
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
@@ -137,6 +143,9 @@ public class MessageRouter {
                     }
                     return;
                 }
+
+                // 计数+1
+                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
                 // 子任务状态通知（根据配置）
                 if (filterConfig.isShowSubtaskStatus()) {
