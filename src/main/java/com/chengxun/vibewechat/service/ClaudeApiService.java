@@ -222,7 +222,13 @@ public class ClaudeApiService {
     private String buildRequestBody(List<Map<String, String>> messages) {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"model\":\"").append(escapeJson(claudeConfig.getModel())).append("\",");
+
+        // 处理模型名：去除 [1m] 等后缀，这些是 CLI 设置不是 API 参数
+        String modelName = claudeConfig.getModel();
+        if (modelName != null && modelName.contains("[")) {
+            modelName = modelName.substring(0, modelName.indexOf("["));
+        }
+        sb.append("\"model\":\"").append(escapeJson(modelName)).append("\",");
         sb.append("\"max_tokens\":").append(claudeConfig.getMaxTokens()).append(",");
 
         // 添加 thinking 模式支持
