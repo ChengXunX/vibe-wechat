@@ -124,6 +124,8 @@ public class MessageRouter {
         // 重置消息计数器（每次用户发新消息时重置）
         messageCounts.put(userId, new AtomicInteger(0));
         warningSent.put(userId, false);
+        // 重置 IlInkConnectionHandler 中的计数器
+        ilinkService.resetMessageCount(userId);
 
         // 检查消息限制
         if (!checkMessageLimit(userId)) {

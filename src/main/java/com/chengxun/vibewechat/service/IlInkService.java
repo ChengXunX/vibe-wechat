@@ -136,6 +136,10 @@ public class IlInkService {
         connectionHandler.sendText(userId, text, contextToken, messageType);
     }
 
+    public void resetMessageCount(String userId) {
+        connectionHandler.resetMessageCount(userId);
+    }
+
     public void sendTyping(String userId) {
         connectionHandler.sendTyping(userId);
     }

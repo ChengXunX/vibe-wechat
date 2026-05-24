@@ -31,6 +31,8 @@ public class IlInkConnectionHandler {
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
     private ScheduledExecutorService scheduler;
     private String botToken = "";
+    private static final int MESSAGE_LIMIT = 10;
+    private final java.util.Map<String, Integer> messageCountsMap = new java.util.concurrent.ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -50,6 +52,10 @@ public class IlInkConnectionHandler {
         if (token != null && !token.isEmpty()) {
             startPolling();
         }
+    }
+
+    public void resetMessageCount(String userId) {
+        messageCountsMap.remove(userId);
     }
 
     public String getBotToken() {
@@ -147,11 +153,28 @@ public class IlInkConnectionHandler {
             log.warn("Not connected to ilink");
             return;
         }
+
+        // 统一计数：进入函数第一句话就是加次数
+        int currentCount = messageCountsMap.compute(userId, (k, v) -> v == null ? 1 : v + 1);
+        log.info("Send message: userId={}, type={}, count={}", userId, messageType, currentCount);
+
+        // 如果次数 >= 10 且不是最终结果，直接跳过
+        if (currentCount >= MESSAGE_LIMIT && !"result".equals(messageType)) {
+            log.info("Skipping non-result message at count {}", currentCount);
+            return;
+        }
+
+        // 如果次数 == 9，附加警告信息
+        String finalText = text;
+        if (currentCount == MESSAGE_LIMIT - 1) {
+            finalText = text + "\n\n> ⚠️ 微信消息次数即将达到上限（" + currentCount + "/" + MESSAGE_LIMIT + "），后续工具通知将被屏蔽";
+        }
+
         try {
             String url = baseUrl + "/ilink/bot/sendmessage";
 
             // 格式化 markdown 为纯文本
-            String formattedText = formatMarkdown(text);
+            String formattedText = formatMarkdown(finalText);
             String escapedText = formattedText.replace("\\", "\\\\")
                     .replace("\"", "\\\"")
                     .replace("\n", "\\n")
