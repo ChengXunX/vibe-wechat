@@ -58,6 +58,7 @@ public class ClaudeApiService {
             if (Files.exists(Path.of(path))) {
                 claudeConfig.setInstallPath(path);
                 log.info("Detected Claude installation at: {}", path);
+                loadClaudeConfig();
                 return;
             }
         }
@@ -69,6 +70,7 @@ public class ClaudeApiService {
             if (!output.isEmpty() && Files.exists(Path.of(output))) {
                 claudeConfig.setInstallPath(output);
                 log.info("Detected Claude installation at: {}", output);
+                loadClaudeConfig();
                 return;
             }
         } catch (Exception e) {
@@ -76,6 +78,52 @@ public class ClaudeApiService {
         }
 
         log.warn("Claude installation not found");
+    }
+
+    private void loadClaudeConfig() {
+        try {
+            String configPath = System.getProperty("user.home") + "/.claude/settings.json";
+            Path configFilePath = Path.of(configPath);
+
+            if (Files.exists(configFilePath)) {
+                String content = new String(Files.readAllBytes(configFilePath));
+
+                // 提取 ANTHROPIC_BASE_URL
+                int baseUrlStart = content.indexOf("\"ANTHROPIC_BASE_URL\":\"") + 22;
+                int baseUrlEnd = content.indexOf("\"", baseUrlStart);
+                if (baseUrlStart > 21 && baseUrlEnd > baseUrlStart) {
+                    String baseUrl = content.substring(baseUrlStart, baseUrlEnd);
+                    if (claudeConfig.getApiUrl() == null || claudeConfig.getApiUrl().isEmpty()) {
+                        claudeConfig.setApiUrl(baseUrl);
+                        log.info("Loaded Claude API URL: {}", baseUrl);
+                    }
+                }
+
+                // 提取 ANTHROPIC_AUTH_TOKEN
+                int tokenStart = content.indexOf("\"ANTHROPIC_AUTH_TOKEN\":\"") + 23;
+                int tokenEnd = content.indexOf("\"", tokenStart);
+                if (tokenStart > 22 && tokenEnd > tokenStart) {
+                    String token = content.substring(tokenStart, tokenEnd);
+                    if (claudeConfig.getApiKey() == null || claudeConfig.getApiKey().isEmpty()) {
+                        claudeConfig.setApiKey(token);
+                        log.info("Loaded Claude API Key: {}...{}", token.substring(0, Math.min(8, token.length())), token.substring(Math.max(0, token.length() - 4)));
+                    }
+                }
+
+                // 提取 ANTHROPIC_MODEL
+                int modelStart = content.indexOf("\"ANTHROPIC_MODEL\":\"") + 20;
+                int modelEnd = content.indexOf("\"", modelStart);
+                if (modelStart > 19 && modelEnd > modelStart) {
+                    String model = content.substring(modelStart, modelEnd);
+                    if (claudeConfig.getModel() == null || claudeConfig.getModel().isEmpty()) {
+                        claudeConfig.setModel(model);
+                        log.info("Loaded Claude Model: {}", model);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed to load Claude config: {}", e.getMessage());
+        }
     }
 
     public static class TokenUsage {

@@ -162,47 +162,60 @@ public class MessageRouter {
         String maskedKey = (apiKey != null && apiKey.length() > 8) ?
                 apiKey.substring(0, 4) + "****" + apiKey.substring(apiKey.length() - 4) : "未配置";
 
+        String on = "✅ 显示";
+        String off = "❌ 隐藏";
+
         String status = String.format("""
-                当前配置状态:
+                **当前配置状态**
 
-                --- Claude ---
-                API地址: %s
-                API Key: %s
-                模型: %s
-                安装路径: %s
+                ════════════════════════
+                **Claude 配置**
+                ════════════════════════
+                API地址: `%s`
+                API Key: `%s`
+                模型: `%s`
+                安装路径: `%s`
 
-                --- 消息过滤 ---
-                工具调用: %s
-                读取文件: %s
-                编辑文件: %s
-                文件操作: %s
-                决策消息: %s
-                结果消息: %s
-                子任务: %s
-                任务完成: %s
-                耗时: %s
-                Token统计: %s
+                ════════════════════════
+                **消息过滤**
+                ════════════════════════
+                | 配置项 | 状态 |
+                |--------|------|
+                | 工具调用 | %s |
+                | 读取文件 | %s |
+                | 编辑文件 | %s |
+                | 文件操作 | %s |
+                | 决策消息 | %s |
+                | 结果消息 | %s |
+                | 子任务 | %s |
+                | 任务完成 | %s |
+                | 耗时 | %s |
+                | Token统计 | %s |
 
-                --- 限制 ---
+                ════════════════════════
+                **限制**
+                ════════════════════════
                 每小时消息数: %d
 
-                --- Token使用 ---
+                ════════════════════════
+                **Token使用**
+                ════════════════════════
                 %s
                 """,
                 claudeApiService.getApiUrl(),
                 maskedKey,
                 claudeApiService.getModel(),
                 claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
-                filterConfig.isShowToolCalls() ? "显示" : "隐藏",
-                filterConfig.isShowFileRead() ? "显示" : "隐藏",
-                filterConfig.isShowFileEdit() ? "显示" : "隐藏",
-                filterConfig.isShowFileOperations() ? "显示" : "隐藏",
-                filterConfig.isShowDecisionsOnly() ? "显示" : "隐藏",
-                filterConfig.isShowResultsOnly() ? "显示" : "隐藏",
-                filterConfig.isShowSubtaskCompletion() ? "显示" : "隐藏",
-                filterConfig.isShowTaskCompletion() ? "显示" : "隐藏",
-                filterConfig.isShowTaskDuration() ? "显示" : "隐藏",
-                filterConfig.isShowTokenUsage() ? "显示" : "隐藏",
+                filterConfig.isShowToolCalls() ? on : off,
+                filterConfig.isShowFileRead() ? on : off,
+                filterConfig.isShowFileEdit() ? on : off,
+                filterConfig.isShowFileOperations() ? on : off,
+                filterConfig.isShowDecisionsOnly() ? on : off,
+                filterConfig.isShowResultsOnly() ? on : off,
+                filterConfig.isShowSubtaskCompletion() ? on : off,
+                filterConfig.isShowTaskCompletion() ? on : off,
+                filterConfig.isShowTaskDuration() ? on : off,
+                filterConfig.isShowTokenUsage() ? on : off,
                 filterConfig.getMaxMessagesPerUser(),
                 claudeApiService.getTokenUsageSummary(userId));
         ilinkService.sendText(userId, status, contextToken);
