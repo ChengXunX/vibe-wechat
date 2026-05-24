@@ -49,6 +49,7 @@ public class MessageRouter {
     private static final String V_FILEREAD = "v-fileread";
     private static final String V_FILEEDIT = "v-fileedit";
     private static final String V_TOKEN = "v-token";
+    private static final String V_CLAUDE = "v-claude";
 
     public void handleMessage(String userId, String message) {
         // 检查是否为 vibe-wechat 配置命令（v- 开头）
@@ -93,6 +94,7 @@ public class MessageRouter {
             case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts);
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts);
             case V_TOKEN -> handleTokenCommand(userId, parts);
+            case V_CLAUDE -> handleClaudePathCommand(userId, parts);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令");
         }
     }
@@ -108,6 +110,7 @@ public class MessageRouter {
                 v-api <url>     设置 Claude API 地址（默认: api.anthropic.com）
                 v-key <key>     设置 Claude API Key
                 v-model <name>  设置 Claude 模型（默认: claude-sonnet-4-20250514）
+                v-claude <path> 设置 Claude 安装路径
 
                 --- 快捷过滤 ---
                 v-tools         开关工具类消息（如grep、find等）
@@ -154,6 +157,7 @@ public class MessageRouter {
                 API地址: %s
                 API Key: %s
                 模型: %s
+                安装路径: %s
 
                 --- 消息过滤 ---
                 工具调用: %s
@@ -176,6 +180,7 @@ public class MessageRouter {
                 claudeApiService.getApiUrl(),
                 maskedKey,
                 claudeApiService.getModel(),
+                claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
                 filterConfig.isShowToolCalls() ? "显示" : "隐藏",
                 filterConfig.isShowFileRead() ? "显示" : "隐藏",
                 filterConfig.isShowFileEdit() ? "显示" : "隐藏",
@@ -329,6 +334,18 @@ public class MessageRouter {
             String usage = claudeApiService.getTokenUsageSummary(userId);
             ilinkService.sendText(userId, "当前 Token 使用:\n" + usage);
         }
+    }
+
+    private void handleClaudePathCommand(String userId, String[] parts) {
+        if (parts.length < 2) {
+            String currentPath = claudeApiService.getInstallPath();
+            ilinkService.sendText(userId, "用法: v-claude <path>\n当前路径: " + (currentPath != null ? currentPath : "自动检测"));
+            return;
+        }
+
+        String path = parts[1];
+        claudeApiService.setInstallPath(path);
+        ilinkService.sendText(userId, "已设置 Claude 安装路径: " + path);
     }
 
     private boolean checkMessageLimit(String userId) {

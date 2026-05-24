@@ -1,17 +1,18 @@
 package com.chengxun.vibewechat.service;
 
+import com.chengxun.vibewechat.config.ClaudeConfig;
 import com.chengxun.vibewechat.config.FilterConfig;
-import com.chengxun.vibewechat.model.ClaudeMessage;
-import com.chengxun.vibewechat.model.MessageType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PostConstruct;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,17 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class ClaudeApiService {
 
-    @Value("${vibe-wechat.claude.api-key:}")
-    private String apiKey;
-
-    @Value("${vibe-wechat.claude.api-url:https://api.anthropic.com}")
-    private String apiUrl;
-
-    @Value("${vibe-wechat.claude.model:claude-sonnet-4-20250514}")
-    private String model;
-
-    @Value("${vibe-wechat.claude.max-tokens:4096}")
-    private int maxTokens;
+    @Autowired
+    private ClaudeConfig claudeConfig;
 
     @Autowired
     private FilterConfig filterConfig;
@@ -43,6 +35,32 @@ public class ClaudeApiService {
 
     private final Map<String, List<Map<String, String>>> conversationHistory = new ConcurrentHashMap<>();
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
+
+    @PostConstruct
+    public void init() {
+        // 自动检测 Claude 安装路径
+        if (claudeConfig.getInstallPath() == null || claudeConfig.getInstallPath().isEmpty()) {
+            detectClaudePath();
+        }
+    }
+
+    private void detectClaudePath() {
+        String[] commonPaths = {
+            "/usr/local/bin/claude",
+            "/opt/claude/bin/claude",
+            System.getProperty("user.home") + "/claude/bin/claude",
+            System.getProperty("user.home") + "/.local/bin/claude"
+        };
+
+        for (String path : commonPaths) {
+            if (Files.exists(Path.of(path))) {
+                claudeConfig.setInstallPath(path);
+                log.info("Detected Claude installation at: {}", path);
+                return;
+            }
+        }
+        log.warn("Claude installation not found in common paths");
+    }
 
     public static class TokenUsage {
         public int inputTokens = 0;
@@ -65,9 +83,9 @@ public class ClaudeApiService {
         try {
             String requestBody = buildRequestBody(history);
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl + "/v1/messages"))
+                    .uri(URI.create(claudeConfig.getApiUrl() + "/v1/messages"))
                     .header("Content-Type", "application/json")
-                    .header("x-api-key", apiKey)
+                    .header("x-api-key", claudeConfig.getApiKey())
                     .header("anthropic-version", "2023-06-01")
                     .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                     .timeout(Duration.ofSeconds(60))
@@ -93,22 +111,6 @@ public class ClaudeApiService {
         }
     }
 
-    public String sendWithFilter(String userId, String message) {
-        String response = sendMessage(userId, message);
-
-        // 根据过滤配置决定是否显示
-        ClaudeMessage claudeMsg = new ClaudeMessage(userId, response, MessageType.TEXT);
-        if (!filterConfig.isShowResultsOnly()) {
-            return response;
-        }
-
-        // 如果启用了结果过滤，只返回结果部分
-        if (isResultMessage(response)) {
-            return response;
-        }
-        return null;
-    }
-
     public void clearHistory(String userId) {
         conversationHistory.remove(userId);
         tokenUsageMap.remove(userId);
@@ -130,7 +132,6 @@ public class ClaudeApiService {
 
     private void parseTokenUsage(String userId, String responseBody) {
         try {
-            // 解析 usage 部分
             int usageStart = responseBody.indexOf("\"usage\":{");
             if (usageStart == -1) return;
 
@@ -152,8 +153,8 @@ public class ClaudeApiService {
     private String buildRequestBody(List<Map<String, String>> messages) {
         StringBuilder sb = new StringBuilder();
         sb.append("{");
-        sb.append("\"model\":\"").append(model).append("\",");
-        sb.append("\"max_tokens\":").append(maxTokens).append(",");
+        sb.append("\"model\":\"").append(claudeConfig.getModel()).append("\",");
+        sb.append("\"max_tokens\":").append(claudeConfig.getMaxTokens()).append(",");
         sb.append("\"messages\":[");
         for (int i = 0; i < messages.size(); i++) {
             Map<String, String> msg = messages.get(i);
@@ -166,7 +167,6 @@ public class ClaudeApiService {
     }
 
     private String parseResponse(String responseBody) {
-        // 简单解析 Claude API 响应
         try {
             int contentStart = responseBody.indexOf("\"text\":\"") + 8;
             int contentEnd = responseBody.indexOf("\"", contentStart);
@@ -190,20 +190,13 @@ public class ClaudeApiService {
                   .replace("\t", "\\t");
     }
 
-    private boolean isResultMessage(String message) {
-        // 判断是否为结果消息
-        return message.contains("已完成") || message.contains("结果") ||
-               message.contains("成功") || message.contains("失败") ||
-               message.length() < 200;
-    }
-
     // Getters and Setters
-    public String getApiKey() { return apiKey; }
-    public void setApiKey(String apiKey) { this.apiKey = apiKey; }
-    public String getApiUrl() { return apiUrl; }
-    public void setApiUrl(String apiUrl) { this.apiUrl = apiUrl; }
-    public String getModel() { return model; }
-    public void setModel(String model) { this.model = model; }
-    public int getMaxTokens() { return maxTokens; }
-    public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
+    public String getApiKey() { return claudeConfig.getApiKey(); }
+    public void setApiKey(String key) { claudeConfig.setApiKey(key); }
+    public String getApiUrl() { return claudeConfig.getApiUrl(); }
+    public void setApiUrl(String url) { claudeConfig.setApiUrl(url); }
+    public String getModel() { return claudeConfig.getModel(); }
+    public void setModel(String model) { claudeConfig.setModel(model); }
+    public String getInstallPath() { return claudeConfig.getInstallPath(); }
+    public void setInstallPath(String path) { claudeConfig.setInstallPath(path); }
 }
