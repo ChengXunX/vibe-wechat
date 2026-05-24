@@ -120,18 +120,22 @@ public class ClaudeApiService {
     }
 
     public static class TokenUsage {
-        public int inputTokens = 0;
-        public int outputTokens = 0;
-        public int totalTokens = 0;
+        private int inputTokens = 0;
+        private int outputTokens = 0;
+        private int totalTokens = 0;
 
-        public void add(int input, int output) {
+        public synchronized void add(int input, int output) {
             this.inputTokens += input;
             this.outputTokens += output;
             this.totalTokens = inputTokens + outputTokens;
         }
+
+        public synchronized int getInputTokens() { return inputTokens; }
+        public synchronized int getOutputTokens() { return outputTokens; }
+        public synchronized int getTotalTokens() { return totalTokens; }
     }
 
-    private volatile long lastDurationMs = 0;
+    private final java.util.Map<String, Long> lastDurationMsMap = new ConcurrentHashMap<>();
 
     public String sendMessage(String userId, String message) {
         String installPath = claudeConfig.getInstallPath();
@@ -194,7 +198,7 @@ public class ClaudeApiService {
 
             int exitCode = process.waitFor();
             long duration = System.currentTimeMillis() - startTime;
-            lastDurationMs = duration;
+            lastDurationMsMap.put(userId, duration);
 
             String result = output.toString().trim();
 
@@ -309,8 +313,8 @@ public class ClaudeApiService {
                 formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens));
     }
 
-    public long getLastDurationMs() {
-        return lastDurationMs;
+    public long getLastDurationMs(String userId) {
+        return lastDurationMsMap.getOrDefault(userId, 0L);
     }
 
     public String getTaskCompletionSummary(String userId, long durationMs) {

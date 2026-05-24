@@ -108,6 +108,21 @@ public class MessageRouter {
 
         long startTime = System.currentTimeMillis();
 
+        // 启动定时刷新 typing 状态的线程
+        Thread typingThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(5000); // 每5秒刷新一次
+                    ilinkService.sendTyping(userId);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        });
+        typingThread.setDaemon(true);
+        typingThread.start();
+
         try {
             // 转发给 Claude
             String response = claudeApiService.sendMessage(userId, message);
@@ -136,7 +151,9 @@ public class MessageRouter {
                 }
             }
         } finally {
-            // 无论如何都停止输入状态
+            // 停止 typing 刷新线程
+            typingThread.interrupt();
+            // 停止输入状态
             ilinkService.sendStopTyping(userId);
         }
     }
@@ -820,6 +837,6 @@ public class MessageRouter {
     }
 
     private boolean isNearLimit(String userId) {
-        return getMessageCount(userId) >= 9;
+        return getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser() - 1;
     }
 }

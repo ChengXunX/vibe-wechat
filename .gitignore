@@ -28,19 +28,7 @@ mvnw.cmd
 # Spring Boot
 application-local.yml
 
-# Redis dump
-dump.rdb
-
-# Node (if any)
-node_modules/
-
-# Environment
-.env
-.env.local
-
 # Config files (may contain API keys)
 vibe-wechat-config.json
 *.config.json
-vibe-wechat-config.json
 *.pid
-*.log

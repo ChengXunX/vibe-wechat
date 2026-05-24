@@ -1,6 +1,6 @@
 # Vibe WeChat
 
-微信 ilink 机器人连接 Claude 的中间件。
+个人的微信 vibe coding 工具 - 通过微信 ilink 机器人连接 Claude CLI，实现远程 vibe coding。
 
 ## 功能
 

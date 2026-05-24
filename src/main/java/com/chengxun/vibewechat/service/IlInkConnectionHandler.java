@@ -106,28 +106,35 @@ public class IlInkConnectionHandler {
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-        log.info("Poll response: {}", response.statusCode());
+        log.debug("Poll response: {}", response.statusCode());
 
         if (response.statusCode() == 200) {
             String body = response.body();
             if (body != null && !body.isEmpty()) {
-                // 更新 get_updates_buf
-                int bufStart = body.indexOf("\"get_updates_buf\":\"") + 19;
-                int bufEnd = body.indexOf("\"", bufStart);
-                if (bufStart > 18 && bufEnd > bufStart) {
-                    lastUpdatesBuf = body.substring(bufStart, bufEnd);
-                }
+                try {
+                    com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                    com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(body);
 
-                // 检查是否有消息
-                if (body.contains("\"msgs\"") && !body.contains("\"msgs\":[]")) {
-                    log.info("Received messages");
-                    if (messageHandler != null) {
-                        messageHandler.accept(body);
+                    // 更新 get_updates_buf
+                    com.fasterxml.jackson.databind.JsonNode bufNode = root.get("get_updates_buf");
+                    if (bufNode != null) {
+                        lastUpdatesBuf = bufNode.asText();
                     }
+
+                    // 检查是否有消息
+                    com.fasterxml.jackson.databind.JsonNode msgs = root.get("msgs");
+                    if (msgs != null && msgs.isArray() && msgs.size() > 0) {
+                        log.info("Received messages");
+                        if (messageHandler != null) {
+                            messageHandler.accept(body);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Failed to parse poll response", e);
                 }
             }
         } else {
-            log.warn("Poll failed: {} - {}", response.statusCode(), response.body());
+            log.debug("Poll failed: {} - {}", response.statusCode(), response.body());
         }
     }
 
