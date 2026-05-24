@@ -37,3 +37,7 @@ node_modules/
 # Environment
 .env
 .env.local
+
+# Config files (may contain API keys)
+vibe-wechat-config.json
+*.config.json
