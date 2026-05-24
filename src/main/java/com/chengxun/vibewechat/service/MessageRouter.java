@@ -3,6 +3,7 @@ package com.chengxun.vibewechat.service;
 import com.chengxun.vibewechat.config.FilterConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -50,6 +51,11 @@ public class MessageRouter {
     private static final String V_FILEEDIT = "v-fileedit";
     private static final String V_TOKEN = "v-token";
     private static final String V_CLAUDE = "v-claude";
+
+    @EventListener
+    public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
+        handleMessage(event.getUserId(), event.getContent());
+    }
 
     public void handleMessage(String userId, String message) {
         // 检查是否为 vibe-wechat 配置命令（v- 开头）
