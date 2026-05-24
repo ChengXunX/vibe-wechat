@@ -93,12 +93,13 @@ public class MessageRouter {
             String sessionId = claudeApiService.getSessionId(userId);
             String model = claudeApiService.getModel();
             String workDir = System.getProperty("user.dir");
+            String sessionDisplay = sessionId != null ? sessionId : "新会话";
             String statusMsg = String.format(
                 "✅ 收到消息，开始处理...\n\n" +
                 "📋 会话ID: `%s`\n" +
                 "🤖 模型: `%s`\n" +
                 "📁 工作目录: `%s`",
-                sessionId != null ? sessionId.substring(0, Math.min(8, sessionId.length())) + "..." : "新会话",
+                sessionDisplay,
                 model,
                 workDir
             );

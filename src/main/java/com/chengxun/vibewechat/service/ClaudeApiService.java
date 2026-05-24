@@ -271,8 +271,7 @@ public class ClaudeApiService {
     }
 
     public String getSessionId(String userId) {
-        // 生成基于 userId 的会话 ID
-        return "session_" + Integer.toHexString(userId.hashCode());
+        return sessionIds.get(userId);
     }
 
     public List<Map<String, String>> getHistory(String userId) {
