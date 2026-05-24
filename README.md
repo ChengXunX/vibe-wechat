@@ -10,6 +10,7 @@
 4. 会话管理 - 新建/切换/清空会话
 5. 实时配置 - 通过微信消息配置 API 和 Key
 6. Token 统计 - 显示每次对话的 Token 消耗
+7. Claude 路径自动识别 - 自动检测机器上 Claude 安装位置
 
 ## 部署方式
 
@@ -106,6 +107,14 @@ vibe-wechat:
 CLAUDE_API_KEY=your-api-key
 CLAUDE_API_URL=https://api.anthropic.com
 ```
+
+### Claude 路径自动识别
+
+程序启动时会自动检测机器上 Claude 的安装位置：
+- 检查常见路径：`/usr/local/bin/claude`、`/opt/claude`、`~/claude` 等
+- 读取配置文件获取自定义路径
+- 用户可通过微信命令 `v-api <url>` 修改 API 地址
+- 优先级：微信命令 > 环境变量 > 配置文件 > 自动检测
 
 ## 消息处理逻辑
 
