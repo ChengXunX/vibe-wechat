@@ -144,6 +144,8 @@ public class ClaudeApiService {
         // 添加用户消息
         history.add(Map.of("role", "user", "content", message));
 
+        long startTime = System.currentTimeMillis();
+
         try {
             String requestBody = buildRequestBody(history);
             HttpRequest request = HttpRequest.newBuilder()
@@ -157,6 +159,8 @@ public class ClaudeApiService {
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
+            long duration = System.currentTimeMillis() - startTime;
+
             if (response.statusCode() == 200) {
                 String assistantMessage = parseResponse(response.body());
                 history.add(Map.of("role", "assistant", "content", assistantMessage));
@@ -164,7 +168,15 @@ public class ClaudeApiService {
                 // 解析 token 使用量
                 parseTokenUsage(userId, response.body());
 
-                return assistantMessage;
+                // 获取 token 使用信息
+                TokenUsage usage = tokenUsageMap.get(userId);
+                String usageStr = "";
+                if (usage != null) {
+                    usageStr = String.format("\n\n---\n📊 Token: %d in / %d out | ⏱️ %dms",
+                            usage.inputTokens, usage.outputTokens, duration);
+                }
+
+                return assistantMessage + usageStr;
             } else {
                 log.error("Claude API error: {} - {}", response.statusCode(), response.body());
                 return "Claude API 调用失败: " + response.statusCode();
@@ -253,9 +265,21 @@ public class ClaudeApiService {
             int contentStart = responseBody.indexOf("\"text\":\"") + 8;
             int contentEnd = responseBody.indexOf("\"", contentStart);
             if (contentStart > 7 && contentEnd > contentStart) {
-                return responseBody.substring(contentStart, contentEnd)
-                        .replace("\\n", "\n")
-                        .replace("\\\"", "\"");
+                String text = responseBody.substring(contentStart, contentEnd);
+                // 处理 Unicode 转义
+                text = text.replace("\\n", "\n")
+                          .replace("\\\"", "\"")
+                          .replace("\\\\", "\\");
+                // 处理 Unicode surrogate pairs (如 😀)
+                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\\\u([0-9a-fA-F]{4})");
+                java.util.regex.Matcher matcher = pattern.matcher(text);
+                StringBuffer sb = new StringBuffer();
+                while (matcher.find()) {
+                    int codePoint = Integer.parseInt(matcher.group(1), 16);
+                    matcher.appendReplacement(sb, new String(Character.toChars(codePoint)));
+                }
+                matcher.appendTail(sb);
+                return sb.toString();
             }
         } catch (Exception e) {
             log.error("Failed to parse Claude response", e);
