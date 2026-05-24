@@ -19,14 +19,32 @@
 - Maven 3+
 - Redis
 
-### 2. 编译打包
+### 2. 快速启动（推荐）
 ```bash
 cd /home/chengxun/vibe-wechat
-mvn clean package -DskipTests
+
+# 启动服务
+./vibe-wechat.sh start
+
+# 停止服务
+./vibe-wechat.sh stop
+
+# 重启服务
+./vibe-wechat.sh restart
+
+# 查看状态
+./vibe-wechat.sh status
+
+# 修改端口（会自动重启）
+./vibe-wechat.sh port 8080
 ```
 
-### 3. 启动服务
+### 3. 手动启动
 ```bash
+# 编译打包
+mvn clean package -DskipTests
+
+# 启动服务
 java -jar target/vibe-wechat-1.0-SNAPSHOT.jar
 ```
 
