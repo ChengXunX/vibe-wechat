@@ -76,6 +76,10 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
+                // 工具消息不计入消息限制，但检查是否已达到限制
+                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
+                    return; // 已达到限制，不发送工具通知
+                }
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
@@ -91,6 +95,10 @@ public class MessageRouter {
 
             @Override
             public void onToolResult(String userId, String result) {
+                // 工具结果不计入消息限制，但检查是否已达到限制
+                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
+                    return; // 已达到限制，不发送工具结果
+                }
                 // 工具结果通知（根据配置）
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
@@ -101,6 +109,10 @@ public class MessageRouter {
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
+                // 子任务状态不计入消息限制，但检查是否已达到限制
+                if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
+                    return; // 已达到限制，不发送子任务状态
+                }
                 // 子任务状态通知（根据配置）
                 if (filterConfig.isShowSubtaskStatus()) {
                     String contextToken = userContextTokens.get(userId);
