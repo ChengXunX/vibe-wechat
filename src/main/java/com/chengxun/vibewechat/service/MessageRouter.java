@@ -78,62 +78,17 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                // 递增计数器
-                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
-                log.info("Tool callback: userId={}, toolName={}, count={}", userId, toolName, count);
-
-                // 达到限制时，停止发送通知
-                if (count >= MESSAGE_LIMIT) {
-                    return;
-                }
-
-                // 根据配置决定是否发送工具调用通知
-                if (filterConfig.isShowToolCalls()) {
-                    String contextToken = userContextTokens.get(userId);
-                    // 清理 JSON 转义字符
-                    String cleanInput = toolInput
-                        .replace("\\\"", "\"")
-                        .replace("\\n", "\n")
-                        .replace("\\t", "\t")
-                        .replace("\\\\", "\\");
-                    String msg = "🔧 工具调用: " + toolName + "\n" + cleanInput;
-                    ilinkService.sendText(userId, msg, contextToken);
-                }
+                // 工具调用不直接发送，等最终结果一起
             }
 
             @Override
             public void onToolResult(String userId, String result) {
-                // 递增计数器
-                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
-
-                // 达到限制时，停止发送通知
-                if (count >= MESSAGE_LIMIT) {
-                    return;
-                }
-
-                // 工具结果通知（根据配置）
-                if (filterConfig.isShowToolCalls()) {
-                    String contextToken = userContextTokens.get(userId);
-                    String msg = "📋 工具结果: " + result;
-                    ilinkService.sendText(userId, msg, contextToken);
-                }
+                // 工具结果不直接发送，等最终结果一起
             }
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                // 递增计数器
-                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
-
-                // 达到限制时，停止发送通知
-                if (count >= MESSAGE_LIMIT) {
-                    return;
-                }
-
-                // 子任务状态通知（根据配置）
-                if (filterConfig.isShowSubtaskStatus()) {
-                    String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "🔄 " + status, contextToken);
-                }
+                // 子任务状态不直接发送，等最终结果一起
             }
         });
     }
@@ -189,6 +144,8 @@ public class MessageRouter {
                 model,
                 workDir
             );
+            // 计入次数
+            messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
             ilinkService.sendText(userId, statusMsg, contextToken);
         }
 
@@ -230,10 +187,12 @@ public class MessageRouter {
                 String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
                 String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
 
-                // 无论是否达到限制，都发送最终结果（这是最后一条消息）
+                // 计入次数（最终结果）
+                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
                 ilinkService.sendText(userId, fullResponse, contextToken);
             } else if (blocked) {
-                // 如果被关键词屏蔽，发送提示
+                // 如果被关键词屏蔽，发送提示（计入次数）
+                messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
                 ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken);
             }
         } finally {
