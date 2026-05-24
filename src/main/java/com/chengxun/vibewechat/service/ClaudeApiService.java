@@ -285,8 +285,8 @@ public class ClaudeApiService {
 
     public String getTokenUsageSummary(String userId) {
         TokenUsage usage = getTokenUsage(userId);
-        return String.format("输入: %d tokens, 输出: %d tokens, 总计: %d tokens",
-                usage.inputTokens, usage.outputTokens, usage.totalTokens);
+        return String.format("输入: %s, 输出: %s, 总计: %s",
+                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens));
     }
 
     public long getLastDurationMs() {
@@ -296,8 +296,19 @@ public class ClaudeApiService {
     public String getTaskCompletionSummary(String userId, long durationMs) {
         TokenUsage usage = getTokenUsage(userId);
         String duration = formatDuration(durationMs);
-        return String.format("---\n📊 Token: %d in / %d out | ⏱️ %s",
-                usage.inputTokens, usage.outputTokens, duration);
+        String sessionId = sessionIds.get(userId);
+        String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
+        return String.format("---\n📊 Token: %s in / %s out | ⏱️ %s%s",
+                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo);
+    }
+
+    private String formatTokens(int tokens) {
+        if (tokens >= 1000000) {
+            return String.format("%.1fm", tokens / 1000000.0);
+        } else if (tokens >= 1000) {
+            return String.format("%.1fk", tokens / 1000.0);
+        }
+        return String.valueOf(tokens);
     }
 
     private String formatDuration(long ms) {
