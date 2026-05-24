@@ -69,40 +69,29 @@ v-config your-api-key claude-sonnet-4-20250514
 - `v-help` - 显示所有命令
 - `v-status` - 显示当前配置（表格形式）
 
-**Claude 一键配置**
-- `v-config <key> [model]` - 一键配置 API Key 和模型
-  - 示例：`v-config sk-xxx1234567890`
-  - 示例：`v-config sk-xxx1234567890 claude-sonnet-4-20250514`
+**Claude 配置**
+- `v-model <name>` - 设置模型（支持 [1m] 配置）
+- `v-claude <path>` - 设置 Claude CLI 安装路径
+- `v-thinking` - 开关推理模式
 
 **配置切换（类似 ccswitch）**
 - `v-switch <name>` - 切换到指定预设配置
 - `v-save <name>` - 保存当前配置为预设
 - `v-profiles` - 列出所有预设配置
-  - 示例：`v-save production` 保存为生产配置
-  - 示例：`v-switch production` 切换到生产配置
-
-**Claude 单独配置**
-- `v-api <url>` - 设置 Claude API 地址（默认: https://api.anthropic.com）
-- `v-key <key>` - 设置 Claude API Key
-- `v-model <name>` - 设置 Claude 模型（默认: claude-sonnet-4-20250514）
-- `v-claude <path>` - 设置 Claude 安装路径
-- `v-claude install` - 自动安装 Claude
 
 **工作目录**
 - `v-cd <path>` - 切换 Claude 工作目录
-  - 示例：`v-cd /home/user/project`
-  - 查看当前目录：`v-cd`
 
 **消息过滤**
-- `v-tools` - 开关工具类消息（如 grep、find 等）
-- `v-fileread` - 开关读取文件类消息（如 Read、cat 等）
-- `v-fileedit` - 开关编辑文件类消息（如 Edit、Write 等）
-- `v-filter <key> <value>` - 高级过滤配置
+- `v-tools` - 开关工具类消息
+- `v-fileread` - 开关读取文件消息
+- `v-fileedit` - 开关编辑文件消息
+- `v-block <词>` - 添加过滤关键词
+- `v-unblock <词>` - 移除过滤关键词
 
 **消息配置**
-- `v-limit <n>` - 每小时消息限制（默认: 不限制）
-- `v-token` - 查看当前 Token 使用
-- `v-token true/false` - 开关 Token 统计显示
+- `v-limit <n>` - 本账号内部消息数限制（24小时）
+- `v-notify` - 收到消息时发送处理确认
 
 **会话管理**
 - `v-new` - 新建会话

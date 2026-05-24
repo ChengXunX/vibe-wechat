@@ -27,7 +27,7 @@ public class IlInkService {
             ━━━━━━━━━━━━━━━━━━━━━━
             **⚡ 快速开始**
             ━━━━━━━━━━━━━━━━━━━━━━
-            发送 `v-config <API_KEY>` 一键配置
+            发送 `v-model <名称>` 设置模型
             发送 `v-switch <名称>` 快速切换配置
             发送 `v-help` 查看所有命令
 

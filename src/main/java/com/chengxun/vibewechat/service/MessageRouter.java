@@ -54,7 +54,6 @@ public class MessageRouter {
     private static final String V_FILEEDIT = "v-fileedit";
     private static final String V_TOKEN = "v-token";
     private static final String V_CLAUDE = "v-claude";
-    private static final String V_CONFIG = "v-config";
     private static final String V_CD = "v-cd";
     private static final String V_BLOCK = "v-block";
     private static final String V_UNBLOCK = "v-unblock";
@@ -154,15 +153,12 @@ public class MessageRouter {
             case V_CLEAR -> handleClearSession(userId, contextToken);
             case V_SESSIONS -> handleListSessions(userId, contextToken);
             case V_LIMIT -> handleLimitCommand(userId, parts, contextToken);
-            case V_API -> handleApiCommand(userId, parts, contextToken);
-            case V_KEY -> handleKeyCommand(userId, parts, contextToken);
             case V_MODEL -> handleModelCommand(userId, parts, contextToken);
             case V_TOOLS -> handleQuickToggle(userId, "tools", parts, contextToken);
             case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts, contextToken);
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
             case V_TOKEN -> handleTokenCommand(userId, parts, contextToken);
             case V_CLAUDE -> handleClaudePathCommand(userId, parts, contextToken);
-            case V_CONFIG -> handleConfigCommand(userId, parts, contextToken);
             case V_CD -> handleCdCommand(userId, parts, contextToken);
             case V_BLOCK -> handleBlockCommand(userId, parts, contextToken);
             case V_UNBLOCK -> handleUnblockCommand(userId, parts, contextToken);
@@ -188,15 +184,12 @@ public class MessageRouter {
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **🔧 Claude 配置**
                 ━━━━━━━━━━━━━━━━━━━━━━
-                `v-config <key> [url] [model]` 一键配置
+                `v-model <name>`   设置模型（支持 [1m] 配置）
+                `v-claude <path>`  设置安装路径
+                `v-thinking`       开关推理模式
                 `v-switch <name>`  切换预设配置
                 `v-save <name>`    保存当前配置
                 `v-profiles`       列出所有预设
-                `v-api <url>`      设置 API 地址
-                `v-key <key>`      设置 API Key
-                `v-model <name>`   设置模型
-                `v-claude <path>`  设置安装路径
-                `v-thinking`       开关推理模式
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **📁 工作目录**
@@ -763,15 +756,25 @@ public class MessageRouter {
         ilinkService.sendText(userId, "Claude 配置已更新:\n- API Key: " + maskedKey + "\n- 模型: " + model, contextToken);
     }
 
+    private final Map<String, Long> messageExpiry = new ConcurrentHashMap<>();
+
     private boolean checkMessageLimit(String userId) {
         AtomicInteger count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0));
+
+        // 检查是否已过期
+        Long expiry = messageExpiry.get(userId);
+        if (expiry != null && System.currentTimeMillis() > expiry) {
+            count.set(0);
+            messageExpiry.remove(userId);
+        }
+
         if (count.get() >= filterConfig.getMaxMessagesPerUser()) {
             return false;
         }
         count.incrementAndGet();
 
-        // 24小时后重置计数
-        scheduler.schedule(() -> messageCounts.remove(userId), 24, TimeUnit.HOURS);
+        // 设置24小时过期时间（只在第一次时设置）
+        messageExpiry.putIfAbsent(userId, System.currentTimeMillis() + 24 * 60 * 60 * 1000);
         return true;
     }
 
