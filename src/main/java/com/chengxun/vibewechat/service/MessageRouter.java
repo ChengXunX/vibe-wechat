@@ -76,42 +76,37 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                // 检查消息限制
+                // 工具消息不计入消息次数，但如果已达到限制则不发送通知
                 if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return; // 已达到限制，不发送
+                    return;
                 }
                 // 根据配置决定是否发送工具调用通知
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
-                    String msg = "🔧 工具调用: " + toolName;
-                    if (toolInput.length() > 100) {
-                        msg += "\n" + toolInput.substring(0, 100) + "...";
-                    } else {
-                        msg += "\n" + toolInput;
-                    }
+                    String msg = "🔧 工具调用: " + toolName + "\n" + toolInput;
                     ilinkService.sendText(userId, msg, contextToken);
                 }
             }
 
             @Override
             public void onToolResult(String userId, String result) {
-                // 检查消息限制
+                // 工具结果不计入消息次数，但如果已达到限制则不发送通知
                 if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return; // 已达到限制，不发送
+                    return;
                 }
                 // 工具结果通知（根据配置）
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
-                    String msg = "📋 工具结果: " + (result.length() > 200 ? result.substring(0, 200) + "..." : result);
+                    String msg = "📋 工具结果: " + result;
                     ilinkService.sendText(userId, msg, contextToken);
                 }
             }
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                // 检查消息限制
+                // 子任务状态不计入消息次数，但如果已达到限制则不发送通知
                 if (getMessageCount(userId) >= filterConfig.getMaxMessagesPerUser()) {
-                    return; // 已达到限制，不发送
+                    return;
                 }
                 // 子任务状态通知（根据配置）
                 if (filterConfig.isShowSubtaskStatus()) {
