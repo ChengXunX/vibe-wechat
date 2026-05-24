@@ -63,6 +63,8 @@ public class MessageRouter {
 
     // 存储用户ID到contextToken的映射
     private final Map<String, String> userContextTokens = new ConcurrentHashMap<>();
+    // 存储用户是否已发送过警告
+    private final Map<String, Boolean> warningSent = new ConcurrentHashMap<>();
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -80,10 +82,11 @@ public class MessageRouter {
                 int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
                 log.info("Tool callback: userId={}, toolName={}, count={}, max={}", userId, toolName, count, MESSAGE_LIMIT);
 
-                // 达到第9条时，发送警告
-                if (count == MESSAGE_LIMIT - 1) {
+                // 达到第9条时，发送警告（只发一次）
+                if (count == MESSAGE_LIMIT - 1 && !warningSent.getOrDefault(userId, false)) {
                     String contextToken = userContextTokens.get(userId);
                     ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
+                    warningSent.put(userId, true);
                     return;
                 }
 
@@ -111,10 +114,11 @@ public class MessageRouter {
                 // 先递增计数器
                 int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
-                // 达到第9条时，发送警告
-                if (count == MESSAGE_LIMIT - 1) {
+                // 达到第9条时，发送警告（只发一次）
+                if (count == MESSAGE_LIMIT - 1 && !warningSent.getOrDefault(userId, false)) {
                     String contextToken = userContextTokens.get(userId);
                     ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
+                    warningSent.put(userId, true);
                     return;
                 }
 
@@ -136,10 +140,11 @@ public class MessageRouter {
                 // 先递增计数器
                 int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
-                // 达到第9条时，发送警告
-                if (count == MESSAGE_LIMIT - 1) {
+                // 达到第9条时，发送警告（只发一次）
+                if (count == MESSAGE_LIMIT - 1 && !warningSent.getOrDefault(userId, false)) {
                     String contextToken = userContextTokens.get(userId);
                     ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续通知将被屏蔽", contextToken);
+                    warningSent.put(userId, true);
                     return;
                 }
 
@@ -932,6 +937,7 @@ public class MessageRouter {
         if (expiry != null && System.currentTimeMillis() > expiry) {
             count.set(0);
             messageExpiry.remove(userId);
+            warningSent.remove(userId);
         }
 
         int currentCount = count.get();
