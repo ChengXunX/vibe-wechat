@@ -51,6 +51,7 @@ public class MessageRouter {
     private static final String V_FILEEDIT = "v-fileedit";
     private static final String V_TOKEN = "v-token";
     private static final String V_CLAUDE = "v-claude";
+    private static final String V_CONFIG = "v-config";
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -105,6 +106,7 @@ public class MessageRouter {
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
             case V_TOKEN -> handleTokenCommand(userId, parts, contextToken);
             case V_CLAUDE -> handleClaudePathCommand(userId, parts, contextToken);
+            case V_CONFIG -> handleConfigCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -119,6 +121,7 @@ public class MessageRouter {
                 `v-status`        显示当前配置状态
 
                 **Claude 配置**
+                `v-config <key> [model]` 一键配置 API Key 和模型
                 `v-api <url>`     设置 Claude API 地址（默认: api.anthropic.com）
                 `v-key <key>`     设置 Claude API Key
                 `v-model <name>`  设置 Claude 模型（默认: claude-sonnet-4-20250514）
@@ -447,6 +450,68 @@ public class MessageRouter {
         } catch (Exception e) {
             ilinkService.sendText(userId, "安装失败: " + e.getMessage(), contextToken);
         }
+    }
+
+    private void handleConfigCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            String help = """
+                    **一键配置 Claude**
+
+                    用法: `v-config <api_key> [model]`
+
+                    示例:
+                    `v-config sk-xxx1234567890`
+                    `v-config sk-xxx1234567890 claude-sonnet-4-20250514`
+
+                    说明:
+                    - 第一个参数为 API Key（必填）
+                    - 第二个参数为模型名称（可选，默认: claude-sonnet-4-20250514）
+                    """;
+            ilinkService.sendText(userId, help, contextToken);
+            return;
+        }
+
+        String apiKey = parts[1];
+        String model = parts.length > 2 ? parts[2] : "claude-sonnet-4-20250514";
+
+        // 设置 API Key
+        claudeApiService.setApiKey(apiKey);
+
+        // 设置模型
+        claudeApiService.setModel(model);
+
+        // 更新 Claude 配置文件
+        try {
+            String configPath = System.getProperty("user.home") + "/.claude/settings.json";
+            java.io.File configFile = new java.io.File(configPath);
+
+            if (configFile.exists()) {
+                String content = new String(java.nio.file.Files.readAllBytes(configFile.toPath()));
+
+                // 更新 ANTHROPIC_AUTH_TOKEN
+                if (content.contains("\"ANTHROPIC_AUTH_TOKEN\"")) {
+                    content = content.replaceAll("\"ANTHROPIC_AUTH_TOKEN\":\"[^\"]*\"", "\"ANTHROPIC_AUTH_TOKEN\":\"" + apiKey + "\"");
+                } else if (content.contains("\"env\"")) {
+                    content = content.replaceFirst("\\{\"env\":\\{", "{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"" + apiKey + "\",");
+                }
+
+                // 更新 ANTHROPIC_MODEL
+                if (content.contains("\"ANTHROPIC_MODEL\"")) {
+                    content = content.replaceAll("\"ANTHROPIC_MODEL\":\"[^\"]*\"", "\"ANTHROPIC_MODEL\":\"" + model + "\"");
+                } else if (content.contains("\"env\"")) {
+                    content = content.replaceFirst("\\{\"env\":\\{", "{\"env\":{\"ANTHROPIC_MODEL\":\"" + model + "\",");
+                }
+
+                java.nio.file.Files.write(configFile.toPath(), content.getBytes());
+            }
+        } catch (Exception e) {
+            log.error("Failed to update Claude config", e);
+        }
+
+        String maskedKey = apiKey.length() > 8 ?
+                apiKey.substring(0, 4) + "****" + apiKey.substring(apiKey.length() - 4) : apiKey;
+
+        ilinkService.sendText(userId, "Claude 配置已更新:\n- API Key: " + maskedKey + "\n- 模型: " + model, contextToken);
     }
 
     private boolean checkMessageLimit(String userId) {
