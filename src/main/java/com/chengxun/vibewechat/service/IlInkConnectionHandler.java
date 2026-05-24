@@ -139,6 +139,10 @@ public class IlInkConnectionHandler {
     }
 
     public void sendText(String userId, String text, String contextToken) {
+        sendText(userId, text, contextToken, "result");
+    }
+
+    public void sendText(String userId, String text, String contextToken, String messageType) {
         if (!connected || botToken.isEmpty()) {
             log.warn("Not connected to ilink");
             return;

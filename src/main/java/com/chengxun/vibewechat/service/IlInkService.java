@@ -129,7 +129,11 @@ public class IlInkService {
     }
 
     public void sendText(String userId, String text, String contextToken) {
-        connectionHandler.sendText(userId, text, contextToken);
+        connectionHandler.sendText(userId, text, contextToken, "result");
+    }
+
+    public void sendText(String userId, String text, String contextToken, String messageType) {
+        connectionHandler.sendText(userId, text, contextToken, messageType);
     }
 
     public void sendTyping(String userId) {

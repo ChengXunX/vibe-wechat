@@ -74,19 +74,14 @@ public class MessageRouter {
 
     @jakarta.annotation.PostConstruct
     public void init() {
-        // 设置工具调用回调 - 工具调用直接发送，不计入次数
+        // 工具调用回调 - 直接发送，不计数
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
-                    String cleanInput = toolInput
-                        .replace("\\\"", "\"")
-                        .replace("\\n", "\n")
-                        .replace("\\t", "\t")
-                        .replace("\\\\", "\\");
-                    String msg = "🔧 工具调用: " + toolName + "\n" + cleanInput;
-                    ilinkService.sendText(userId, msg, contextToken);
+                    String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
+                    ilinkService.sendText(userId, "🔧 工具调用: " + toolName + "\n" + cleanInput, contextToken, "tool");
                 }
             }
 
@@ -94,7 +89,7 @@ public class MessageRouter {
             public void onToolResult(String userId, String result) {
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "📋 工具结果: " + result, contextToken);
+                    ilinkService.sendText(userId, "📋 工具结果: " + result, contextToken, "sub_result");
                 }
             }
 
@@ -102,7 +97,7 @@ public class MessageRouter {
             public void onSubtaskStatus(String userId, String status) {
                 if (filterConfig.isShowSubtaskStatus()) {
                     String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "🔄 " + status, contextToken);
+                    ilinkService.sendText(userId, "🔄 " + status, contextToken, "sub_result");
                 }
             }
         });
@@ -159,9 +154,7 @@ public class MessageRouter {
                 model,
                 workDir
             );
-            // 计入次数
-            messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
-            ilinkService.sendText(userId, statusMsg, contextToken);
+            ilinkService.sendText(userId, statusMsg, contextToken, "result");
         }
 
         long startTime = System.currentTimeMillis();
@@ -197,28 +190,25 @@ public class MessageRouter {
 
             if (!blocked && response != null && !response.isEmpty()) {
                 int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
+                String taskSummary = claudeApiService.getTaskSummary(userId, message);
+                String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
 
-                // 第9条时发送警告
+                // 第9条时合并警告到消息末尾
                 if (count == MESSAGE_LIMIT - 1) {
-                    ilinkService.sendText(userId, "> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续工具通知将被屏蔽", contextToken);
-                }
-
-                // 第10条或之后只发最终结果
-                if (count >= MESSAGE_LIMIT) {
-                    String taskSummary = claudeApiService.getTaskSummary(userId, message);
-                    String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
+                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary + "\n\n> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续工具通知将被屏蔽";
+                    ilinkService.sendText(userId, fullResponse, contextToken, "result");
+                } else if (count >= MESSAGE_LIMIT) {
+                    // 第10条或之后只发最终结果
                     String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
-                    ilinkService.sendText(userId, fullResponse, contextToken);
+                    ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else {
                     // 正常发送最终结果
-                    String taskSummary = claudeApiService.getTaskSummary(userId, message);
-                    String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
                     String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
-                    ilinkService.sendText(userId, fullResponse, contextToken);
+                    ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 }
             } else if (blocked) {
                 messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
-                ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken);
+                ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
             }
         } finally {
             // 停止 typing 刷新线程
