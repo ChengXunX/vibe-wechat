@@ -276,8 +276,24 @@ public class ClaudeApiService {
     private String parseResponse(String responseBody) {
         try {
             int contentStart = responseBody.indexOf("\"text\":\"") + 8;
-            int contentEnd = responseBody.indexOf("\"", contentStart);
-            if (contentStart > 7 && contentEnd > contentStart) {
+            if (contentStart <= 7) return "解析响应失败";
+
+            // 找到文本内容的结束位置（处理转义的引号）
+            int contentEnd = contentStart;
+            boolean escaped = false;
+            while (contentEnd < responseBody.length()) {
+                char c = responseBody.charAt(contentEnd);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    break;
+                }
+                contentEnd++;
+            }
+
+            if (contentEnd > contentStart) {
                 String text = responseBody.substring(contentStart, contentEnd);
                 // 处理 Unicode 转义
                 text = text.replace("\\n", "\n")
