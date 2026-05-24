@@ -85,20 +85,28 @@ public class IlInkConnectionHandler {
 
     private String lastUpdatesBuf = "";
 
+    private String randomUin() {
+        return String.valueOf(1000000000L + (long)(Math.random() * 9000000000L));
+    }
+
     private void pollUpdates() throws Exception {
         String url = baseUrl + "/ilink/bot/getupdates";
 
-        String jsonBody = String.format("{\"get_updates_buf\":\"%s\",\"base_info\":{}}", lastUpdatesBuf);
+        String jsonBody = String.format("{\"get_updates_buf\":\"%s\",\"base_info\":{\"channel_version\":\"1.0\"}}", lastUpdatesBuf);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Content-Type", "application/json")
-                .header("iLink-App-ClientVersion", "1")
+                .header("AuthorizationType", "ilink_bot_token")
+                .header("Authorization", "Bearer " + botToken)
+                .header("X-WECHAT-UIN", randomUin())
                 .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                 .timeout(Duration.ofSeconds(35))
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        log.info("Poll response: {}", response.statusCode());
 
         if (response.statusCode() == 200) {
             String body = response.body();
@@ -112,14 +120,14 @@ public class IlInkConnectionHandler {
 
                 // 检查是否有消息
                 if (body.contains("\"msgs\"") && !body.contains("\"msgs\":[]")) {
-                    log.info("Received messages, calling handler");
+                    log.info("Received messages");
                     if (messageHandler != null) {
                         messageHandler.accept(body);
                     }
                 }
             }
         } else {
-            log.warn("Poll failed with status: {}", response.statusCode());
+            log.warn("Poll failed: {} - {}", response.statusCode(), response.body());
         }
     }
 
@@ -131,24 +139,25 @@ public class IlInkConnectionHandler {
         try {
             String url = baseUrl + "/ilink/bot/sendmessage";
 
-            // 使用正确的 ilink 消息格式
             String jsonBody = String.format(
                 "{\"msg\":{\"from_user_id\":\"\",\"to_user_id\":\"%s\",\"client_id\":\"%s\",\"message_type\":2,\"message_state\":2,\"item_list\":[{\"type\":1,\"text_item\":{\"text\":\"%s\"}}]}}",
                 userId,
                 java.util.UUID.randomUUID().toString(),
-                text.replace("\"", "\\\"").replace("\n", "\\n")
+                text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
             );
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .header("Content-Type", "application/json")
-                    .header("iLink-App-ClientVersion", "1")
+                    .header("AuthorizationType", "ilink_bot_token")
+                    .header("Authorization", "Bearer " + botToken)
+                    .header("X-WECHAT-UIN", randomUin())
                     .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
                     .timeout(Duration.ofSeconds(10))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            log.debug("Send message response: {} - {}", response.statusCode(), response.body());
+            log.info("Send message response: {} - {}", response.statusCode(), response.body());
         } catch (Exception e) {
             log.error("Failed to send message", e);
         }
