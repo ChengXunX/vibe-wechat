@@ -150,13 +150,6 @@ public class ClaudeApiService {
                 command.add(model);
             }
 
-            // 添加工作目录
-            String workDir = System.getProperty("user.dir");
-            if (workDir != null) {
-                command.add("--add-dir");
-                command.add(workDir);
-            }
-
             // 添加消息（作为最后一个参数）
             command.add(message);
 
@@ -166,6 +159,7 @@ public class ClaudeApiService {
             pb.redirectErrorStream(true);
 
             // 设置工作目录
+            String workDir = System.getProperty("user.dir");
             if (workDir != null) {
                 pb.directory(new java.io.File(workDir));
             }
