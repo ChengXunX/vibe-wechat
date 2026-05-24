@@ -58,6 +58,7 @@ public class MessageRouter {
     private static final String V_CD = "v-cd";
     private static final String V_BLOCK = "v-block";
     private static final String V_UNBLOCK = "v-unblock";
+    private static final String V_NOTIFY = "v-notify";
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -80,14 +81,37 @@ public class MessageRouter {
         // 发送输入状态
         ilinkService.sendTyping(userId);
 
-        // 转发给 Claude
-        String response = claudeApiService.sendMessage(userId, message);
+        // 如果开启了消息状态通知，发送确认消息
+        if (filterConfig.isShowMessageStatus()) {
+            String sessionId = claudeApiService.getSessionId(userId);
+            String model = claudeApiService.getModel();
+            String workDir = System.getProperty("user.dir");
+            String statusMsg = String.format(
+                "✅ 收到消息，开始处理...\n\n" +
+                "📋 会话ID: `%s`\n" +
+                "🤖 模型: `%s`\n" +
+                "📁 工作目录: `%s`",
+                sessionId != null ? sessionId.substring(0, Math.min(8, sessionId.length())) + "..." : "新会话",
+                model,
+                workDir
+            );
+            ilinkService.sendText(userId, statusMsg, contextToken);
+        }
 
-        // 停止输入状态
-        ilinkService.sendStopTyping(userId);
+        try {
+            // 转发给 Claude
+            String response = claudeApiService.sendMessage(userId, message);
 
-        if (response != null && !response.isEmpty()) {
-            ilinkService.sendText(userId, response, contextToken);
+            // 检查是否接近消息限制，添加提示
+            if (isNearLimit(userId) && filterConfig.isShowMessageStatus()) {
+                String warning = "> ⚠️ 消息次数即将达到上限，Claude 任务完成后将发送最后一条消息\n\n" + response;
+                ilinkService.sendText(userId, warning, contextToken);
+            } else if (response != null && !response.isEmpty()) {
+                ilinkService.sendText(userId, response, contextToken);
+            }
+        } finally {
+            // 无论如何都停止输入状态
+            ilinkService.sendStopTyping(userId);
         }
     }
 
@@ -116,6 +140,7 @@ public class MessageRouter {
             case V_CD -> handleCdCommand(userId, parts, contextToken);
             case V_BLOCK -> handleBlockCommand(userId, parts, contextToken);
             case V_UNBLOCK -> handleUnblockCommand(userId, parts, contextToken);
+            case V_NOTIFY -> handleNotifyCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -163,6 +188,7 @@ public class MessageRouter {
                 ━━━━━━━━━━━━━━━━━━━━━━
                 `v-limit <n>`     每小时消息数
                 `v-token`         Token 使用统计
+                `v-notify`        收到消息时发送状态通知
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **💬 会话管理**
@@ -505,6 +531,19 @@ public class MessageRouter {
         }
     }
 
+    private void handleNotifyCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            String status = filterConfig.isShowMessageStatus() ? "开启" : "关闭";
+            ilinkService.sendText(userId, "用法: v-notify true/false\n当前状态: " + status, contextToken);
+            return;
+        }
+
+        boolean value = Boolean.parseBoolean(parts[1].toLowerCase());
+        filterConfig.setShowMessageStatus(value);
+        configService.saveConfig();
+        ilinkService.sendText(userId, "消息状态通知已设置为: " + (value ? "开启" : "关闭"), contextToken);
+    }
+
     private void handleCdCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
             String currentDir = System.getProperty("user.dir");
@@ -595,8 +634,17 @@ public class MessageRouter {
         }
         count.incrementAndGet();
 
-        // 每小时重置计数
-        scheduler.schedule(() -> messageCounts.remove(userId), 1, TimeUnit.HOURS);
+        // 24小时后重置计数
+        scheduler.schedule(() -> messageCounts.remove(userId), 24, TimeUnit.HOURS);
         return true;
+    }
+
+    private int getMessageCount(String userId) {
+        AtomicInteger count = messageCounts.get(userId);
+        return count != null ? count.get() : 0;
+    }
+
+    private boolean isNearLimit(String userId) {
+        return getMessageCount(userId) >= 9;
     }
 }

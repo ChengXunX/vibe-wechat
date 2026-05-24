@@ -56,6 +56,7 @@ public class ConfigService {
             filter.put("showTaskCompletion", filterConfig.isShowTaskCompletion());
             filter.put("showTaskDuration", filterConfig.isShowTaskDuration());
             filter.put("showTokenUsage", filterConfig.isShowTokenUsage());
+            filter.put("showMessageStatus", filterConfig.isShowMessageStatus());
             filter.put("maxMessagesPerUser", filterConfig.getMaxMessagesPerUser());
             filter.put("blockedKeywords", filterConfig.getBlockedKeywords());
             config.put("filter", filter);
@@ -108,6 +109,7 @@ public class ConfigService {
                 if (filter.containsKey("showTaskCompletion")) filterConfig.setShowTaskCompletion((Boolean) filter.get("showTaskCompletion"));
                 if (filter.containsKey("showTaskDuration")) filterConfig.setShowTaskDuration((Boolean) filter.get("showTaskDuration"));
                 if (filter.containsKey("showTokenUsage")) filterConfig.setShowTokenUsage((Boolean) filter.get("showTokenUsage"));
+                if (filter.containsKey("showMessageStatus")) filterConfig.setShowMessageStatus((Boolean) filter.get("showMessageStatus"));
                 if (filter.containsKey("maxMessagesPerUser")) filterConfig.setMaxMessagesPerUser((Integer) filter.get("maxMessagesPerUser"));
                 if (filter.containsKey("blockedKeywords")) {
                     @SuppressWarnings("unchecked")

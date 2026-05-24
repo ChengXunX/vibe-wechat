@@ -180,6 +180,11 @@ public class ClaudeApiService {
         tokenUsageMap.remove(userId);
     }
 
+    public String getSessionId(String userId) {
+        // 生成基于 userId 的会话 ID
+        return "session_" + Integer.toHexString(userId.hashCode());
+    }
+
     public List<Map<String, String>> getHistory(String userId) {
         return conversationHistory.getOrDefault(userId, new ArrayList<>());
     }

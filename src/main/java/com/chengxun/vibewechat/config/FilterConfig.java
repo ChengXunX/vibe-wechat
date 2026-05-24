@@ -21,6 +21,7 @@ public class FilterConfig {
     private boolean showTaskCompletion = true;
     private boolean showTaskDuration = true;
     private boolean showTokenUsage = true;
+    private boolean showMessageStatus = false;
     private int maxMessagesPerUser = 10;
     private List<String> blockedKeywords = new ArrayList<>();
 }
