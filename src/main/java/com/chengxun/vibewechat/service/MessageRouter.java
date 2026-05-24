@@ -78,6 +78,7 @@ public class MessageRouter {
             public void onToolUse(String userId, String toolName, String toolInput) {
                 int count = getMessageCount(userId);
                 int max = filterConfig.getMaxMessagesPerUser();
+                log.info("Tool callback: userId={}, toolName={}, count={}, max={}", userId, toolName, count, max);
 
                 // 达到第9条时，发送警告并停止后续通知
                 if (count >= max - 1) {
@@ -931,7 +932,13 @@ public class MessageRouter {
             messageExpiry.remove(userId);
         }
 
-        if (count.get() >= filterConfig.getMaxMessagesPerUser()) {
+        int currentCount = count.get();
+        int max = filterConfig.getMaxMessagesPerUser();
+
+        log.info("Message limit check: userId={}, count={}, max={}", userId, currentCount, max);
+
+        if (currentCount >= max) {
+            log.info("Message limit reached for userId={}", userId);
             return false;
         }
         count.incrementAndGet();
