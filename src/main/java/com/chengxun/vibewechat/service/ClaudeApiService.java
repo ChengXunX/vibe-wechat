@@ -417,14 +417,14 @@ public class ClaudeApiService {
     }
 
     public String getTaskSummary(String userId, String originalMessage) {
-        // 使用 Claude 生成任务摘要，提取核心任务描述
+        // 使用 Claude 对用户消息进行缩句，只输出摘要，不回答问题
         String installPath = claudeConfig.getInstallPath();
         if (installPath == null || installPath.isEmpty()) {
             return "任务完成";
         }
 
         try {
-            String prompt = "请从以下用户指令中提取核心任务描述（不超过15个字），只输出摘要，不要其他内容。用户指令：" + originalMessage;
+            String prompt = "你是一个摘要助手。请对以下用户指令进行缩句，提取核心任务意图，不超过10个字。只输出缩句结果，不要回答问题，不要解释，不要添加任何其他内容。用户指令：" + originalMessage;
             List<String> command = new ArrayList<>();
             command.add(installPath);
             command.add("--print");
@@ -448,10 +448,11 @@ public class ClaudeApiService {
             process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
 
             String summary = output.toString().trim();
+            // 去除可能的引号
+            summary = summary.replaceAll("^['\"]|['\"]$", "");
             return summary.isEmpty() ? "任务完成" : summary;
         } catch (Exception e) {
-            // 降级：直接返回原始消息前15字
-            return originalMessage.length() > 15 ? originalMessage.substring(0, 15) + "..." : originalMessage;
+            return "任务完成";
         }
     }
 

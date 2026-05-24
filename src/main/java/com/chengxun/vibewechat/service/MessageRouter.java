@@ -197,15 +197,15 @@ public class MessageRouter {
 
                 // 第9条时合并警告到消息末尾
                 if (count == MESSAGE_LIMIT - 1) {
-                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary + "\n\n> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续工具通知将被屏蔽";
+                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n━━━━━━━━━━━━━━━━━━━━\n" + response + "\n\n" + statsSummary + "\n\n> ⚠️ 微信消息次数即将达到上限（" + count + "/" + MESSAGE_LIMIT + "），后续工具通知将被屏蔽";
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else if (count >= MESSAGE_LIMIT) {
                     // 第10条或之后只发最终结果
-                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
+                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n━━━━━━━━━━━━━━━━━━━━\n" + response + "\n\n" + statsSummary;
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else {
                     // 正常发送最终结果
-                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n---\n" + response + "\n\n" + statsSummary;
+                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n━━━━━━━━━━━━━━━━━━━━\n" + response + "\n\n" + statsSummary;
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 }
             } else if (blocked) {
