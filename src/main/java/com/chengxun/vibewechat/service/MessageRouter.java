@@ -78,8 +78,8 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                // 不递增计数器，只读取当前计数
-                int count = getMessageCount(userId);
+                // 递增计数器
+                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
                 log.info("Tool callback: userId={}, toolName={}, count={}", userId, toolName, count);
 
                 // 达到限制时，停止发送通知
@@ -103,8 +103,8 @@ public class MessageRouter {
 
             @Override
             public void onToolResult(String userId, String result) {
-                // 不递增计数器，只读取当前计数
-                int count = getMessageCount(userId);
+                // 递增计数器
+                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
                 // 达到限制时，停止发送通知
                 if (count >= MESSAGE_LIMIT) {
@@ -121,8 +121,8 @@ public class MessageRouter {
 
             @Override
             public void onSubtaskStatus(String userId, String status) {
-                // 不递增计数器，只读取当前计数
-                int count = getMessageCount(userId);
+                // 递增计数器
+                int count = messageCounts.computeIfAbsent(userId, k -> new AtomicInteger(0)).incrementAndGet();
 
                 // 达到限制时，停止发送通知
                 if (count >= MESSAGE_LIMIT) {
