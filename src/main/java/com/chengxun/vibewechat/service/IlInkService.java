@@ -49,44 +49,59 @@ public class IlInkService {
     private void handleMessage(String message) {
         log.info("Received message: {}", message);
 
-        // ilink 消息格式: {"msgs":[{"content":"xxx","user_id":"xxx",...}]}
+        // ilink 消息格式: {"msgs":[{"from_user_id":"xxx","item_list":[{"type":1,"text_item":{"text":"xxx"}}],...}]}
         try {
-            // 提取 msgs 数组中的消息
             int msgsStart = message.indexOf("\"msgs\":[");
             if (msgsStart == -1) return;
 
-            int msgsEnd = message.indexOf("]", msgsStart);
-            if (msgsEnd == -1) return;
-
-            String msgsStr = message.substring(msgsStart + 8, msgsEnd);
-
-            // 简单解析每条消息
-            int msgStart = 0;
+            // 提取每条消息
+            int searchStart = msgsStart + 8;
             while (true) {
-                int objStart = msgsStr.indexOf("{", msgStart);
-                if (objStart == -1) break;
+                int objStart = message.indexOf("{", searchStart);
+                if (objStart == -1 || objStart > message.indexOf("]", msgsStart)) break;
 
-                int objEnd = msgsStr.indexOf("}", objStart);
+                int objEnd = findMatchingBrace(message, objStart);
                 if (objEnd == -1) break;
 
-                String msgObj = msgsStr.substring(objStart, objEnd + 1);
-                msgStart = objEnd + 1;
+                String msgObj = message.substring(objStart, objEnd + 1);
+                searchStart = objEnd + 1;
 
-                String userId = extractField(msgObj, "user_id");
-                String content = extractField(msgObj, "content");
+                // 提取 from_user_id
+                String userId = extractField(msgObj, "from_user_id");
+                // 提取 context_token
+                String contextToken = extractField(msgObj, "context_token");
+
+                // 提取 text_item.text
+                String content = null;
+                int textItemStart = msgObj.indexOf("\"text_item\":{");
+                if (textItemStart != -1) {
+                    content = extractField(msgObj.substring(textItemStart), "text");
+                }
 
                 if (userId != null && content != null) {
                     if (!connectedUsers.contains(userId)) {
                         connectedUsers.add(userId);
-                        sendText(userId, WELCOME_MESSAGE);
+                        sendText(userId, WELCOME_MESSAGE, contextToken);
                     }
 
-                    eventPublisher.publishEvent(new IlInkMessageEvent(this, userId, content));
+                    eventPublisher.publishEvent(new IlInkMessageEvent(this, userId, content, contextToken));
                 }
             }
         } catch (Exception e) {
             log.error("Failed to parse message: {}", e.getMessage());
         }
+    }
+
+    private int findMatchingBrace(String json, int start) {
+        int depth = 0;
+        for (int i = start; i < json.length(); i++) {
+            if (json.charAt(i) == '{') depth++;
+            if (json.charAt(i) == '}') {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
     }
 
     private String extractField(String json, String field) {
@@ -104,7 +119,11 @@ public class IlInkService {
     }
 
     public void sendText(String userId, String text) {
-        connectionHandler.sendText(userId, text);
+        connectionHandler.sendText(userId, text, null);
+    }
+
+    public void sendText(String userId, String text, String contextToken) {
+        connectionHandler.sendText(userId, text, contextToken);
     }
 
     public void sendTyping(String userId) {
@@ -126,13 +145,16 @@ public class IlInkService {
     public static class IlInkMessageEvent {
         private final String userId;
         private final String content;
+        private final String contextToken;
 
-        public IlInkMessageEvent(Object source, String userId, String content) {
+        public IlInkMessageEvent(Object source, String userId, String content, String contextToken) {
             this.userId = userId;
             this.content = content;
+            this.contextToken = contextToken;
         }
 
         public String getUserId() { return userId; }
         public String getContent() { return content; }
+        public String getContextToken() { return contextToken; }
     }
 }

@@ -54,19 +54,19 @@ public class MessageRouter {
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
-        handleMessage(event.getUserId(), event.getContent());
+        handleMessage(event.getUserId(), event.getContent(), event.getContextToken());
     }
 
-    public void handleMessage(String userId, String message) {
+    public void handleMessage(String userId, String message, String contextToken) {
         // 检查是否为 vibe-wechat 配置命令（v- 开头）
         if (message.startsWith(V_PREFIX)) {
-            handleVibeCommand(userId, message);
+            handleVibeCommand(userId, message, contextToken);
             return;
         }
 
         // 检查消息限制
         if (!checkMessageLimit(userId)) {
-            ilinkService.sendText(userId, "消息次数已达上限，请稍后再试");
+            ilinkService.sendText(userId, "消息次数已达上限，请稍后再试", contextToken);
             return;
         }
 
@@ -80,36 +80,36 @@ public class MessageRouter {
         ilinkService.sendStopTyping(userId);
 
         if (response != null && !response.isEmpty()) {
-            ilinkService.sendText(userId, response);
+            ilinkService.sendText(userId, response, contextToken);
         }
     }
 
-    private void handleVibeCommand(String userId, String command) {
+    private void handleVibeCommand(String userId, String command, String contextToken) {
         String[] parts = command.split("\\s+");
         String cmd = parts[0].toLowerCase();
 
         switch (cmd) {
-            case V_HELP -> showHelp(userId);
-            case V_FILTER -> handleFilterCommand(userId, parts);
-            case V_STATUS -> showStatus(userId);
-            case V_SESSION -> handleSessionCommand(userId, parts);
-            case V_NEW -> handleNewSession(userId);
-            case V_CLEAR -> handleClearSession(userId);
-            case V_SESSIONS -> handleListSessions(userId);
-            case V_LIMIT -> handleLimitCommand(userId, parts);
-            case V_API -> handleApiCommand(userId, parts);
-            case V_KEY -> handleKeyCommand(userId, parts);
-            case V_MODEL -> handleModelCommand(userId, parts);
-            case V_TOOLS -> handleQuickToggle(userId, "tools", parts);
-            case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts);
-            case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts);
-            case V_TOKEN -> handleTokenCommand(userId, parts);
-            case V_CLAUDE -> handleClaudePathCommand(userId, parts);
-            default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令");
+            case V_HELP -> showHelp(userId, contextToken);
+            case V_FILTER -> handleFilterCommand(userId, parts, contextToken);
+            case V_STATUS -> showStatus(userId, contextToken);
+            case V_SESSION -> handleSessionCommand(userId, parts, contextToken);
+            case V_NEW -> handleNewSession(userId, contextToken);
+            case V_CLEAR -> handleClearSession(userId, contextToken);
+            case V_SESSIONS -> handleListSessions(userId, contextToken);
+            case V_LIMIT -> handleLimitCommand(userId, parts, contextToken);
+            case V_API -> handleApiCommand(userId, parts, contextToken);
+            case V_KEY -> handleKeyCommand(userId, parts, contextToken);
+            case V_MODEL -> handleModelCommand(userId, parts, contextToken);
+            case V_TOOLS -> handleQuickToggle(userId, "tools", parts, contextToken);
+            case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts, contextToken);
+            case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
+            case V_TOKEN -> handleTokenCommand(userId, parts, contextToken);
+            case V_CLAUDE -> handleClaudePathCommand(userId, parts, contextToken);
+            default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
 
-    private void showHelp(String userId) {
+    private void showHelp(String userId, String contextToken) {
         String help = """
                 vibe-wechat 命令列表:
 
@@ -155,10 +155,10 @@ public class MessageRouter {
                 - duration    任务耗时 (true/false)
                 - token       Token消耗 (true/false)
                 """;
-        ilinkService.sendText(userId, help);
+        ilinkService.sendText(userId, help, contextToken);
     }
 
-    private void showStatus(String userId) {
+    private void showStatus(String userId, String contextToken) {
         String apiKey = claudeApiService.getApiKey();
         String maskedKey = (apiKey != null && apiKey.length() > 8) ?
                 apiKey.substring(0, 4) + "****" + apiKey.substring(apiKey.length() - 4) : "未配置";
@@ -206,12 +206,12 @@ public class MessageRouter {
                 filterConfig.isShowTokenUsage() ? "显示" : "隐藏",
                 filterConfig.getMaxMessagesPerUser(),
                 claudeApiService.getTokenUsageSummary(userId));
-        ilinkService.sendText(userId, status);
+        ilinkService.sendText(userId, status, contextToken);
     }
 
-    private void handleFilterCommand(String userId, String[] parts) {
+    private void handleFilterCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 3) {
-            ilinkService.sendText(userId, "用法: v-filter <key> <value>\n输入 v-help 查看可配置项");
+            ilinkService.sendText(userId, "用法: v-filter <key> <value>\n输入 v-help 查看可配置项", contextToken);
             return;
         }
 
@@ -229,87 +229,87 @@ public class MessageRouter {
             case "tasks" -> filterConfig.setShowTaskCompletion(Boolean.parseBoolean(value));
             case "duration" -> filterConfig.setShowTaskDuration(Boolean.parseBoolean(value));
             default -> {
-                ilinkService.sendText(userId, "未知配置项: " + key);
+                ilinkService.sendText(userId, "未知配置项: " + key, contextToken);
                 return;
             }
         }
 
-        ilinkService.sendText(userId, "已更新: " + key + " = " + value);
+        ilinkService.sendText(userId, "已更新: " + key + " = " + value, contextToken);
     }
 
-    private void handleSessionCommand(String userId, String[] parts) {
+    private void handleSessionCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
-            ilinkService.sendText(userId, "用法: v-session <session_id>");
+            ilinkService.sendText(userId, "用法: v-session <session_id>", contextToken);
             return;
         }
 
         String sessionId = parts[1];
-        ilinkService.sendText(userId, "已切换到会话: " + sessionId);
+        ilinkService.sendText(userId, "已切换到会话: " + sessionId, contextToken);
     }
 
-    private void handleNewSession(String userId) {
+    private void handleNewSession(String userId, String contextToken) {
         claudeApiService.clearHistory(userId);
-        ilinkService.sendText(userId, "已创建新会话");
+        ilinkService.sendText(userId, "已创建新会话", contextToken);
     }
 
-    private void handleListSessions(String userId) {
-        ilinkService.sendText(userId, "当前会话: " + userId);
+    private void handleListSessions(String userId, String contextToken) {
+        ilinkService.sendText(userId, "当前会话: " + userId, contextToken);
     }
 
-    private void handleClearSession(String userId) {
+    private void handleClearSession(String userId, String contextToken) {
         claudeApiService.clearHistory(userId);
-        ilinkService.sendText(userId, "会话已清空");
+        ilinkService.sendText(userId, "会话已清空", contextToken);
     }
 
-    private void handleLimitCommand(String userId, String[] parts) {
+    private void handleLimitCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
-            ilinkService.sendText(userId, "用法: v-limit <数量>\n当前限制: " + filterConfig.getMaxMessagesPerUser());
+            ilinkService.sendText(userId, "用法: v-limit <数量>\n当前限制: " + filterConfig.getMaxMessagesPerUser(), contextToken);
             return;
         }
 
         try {
             int limit = Integer.parseInt(parts[1]);
             filterConfig.setMaxMessagesPerUser(limit);
-            ilinkService.sendText(userId, "已设置每小时消息限制: " + limit);
+            ilinkService.sendText(userId, "已设置每小时消息限制: " + limit, contextToken);
         } catch (NumberFormatException e) {
-            ilinkService.sendText(userId, "请输入有效数字");
+            ilinkService.sendText(userId, "请输入有效数字", contextToken);
         }
     }
 
-    private void handleApiCommand(String userId, String[] parts) {
+    private void handleApiCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
-            ilinkService.sendText(userId, "用法: v-api <url>\n当前API: " + claudeApiService.getApiUrl());
+            ilinkService.sendText(userId, "用法: v-api <url>\n当前API: " + claudeApiService.getApiUrl(), contextToken);
             return;
         }
 
         String url = parts[1];
         claudeApiService.setApiUrl(url);
-        ilinkService.sendText(userId, "已设置 Claude API 地址: " + url);
+        ilinkService.sendText(userId, "已设置 Claude API 地址: " + url, contextToken);
     }
 
-    private void handleKeyCommand(String userId, String[] parts) {
+    private void handleKeyCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
-            ilinkService.sendText(userId, "用法: v-key <api-key>");
+            ilinkService.sendText(userId, "用法: v-key <api-key>", contextToken);
             return;
         }
 
         String key = parts[1];
         claudeApiService.setApiKey(key);
-        ilinkService.sendText(userId, "已设置 Claude API Key");
+        ilinkService.sendText(userId, "已设置 Claude API Key", contextToken);
     }
 
-    private void handleModelCommand(String userId, String[] parts) {
+    private void handleModelCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
-            ilinkService.sendText(userId, "用法: v-model <model-name>\n当前模型: " + claudeApiService.getModel());
+            ilinkService.sendText(userId, "用法: v-model <model-name>\n当前模型: " + claudeApiService.getModel(), contextToken);
             return;
         }
 
         String model = parts[1];
         claudeApiService.setModel(model);
-        ilinkService.sendText(userId, "已设置 Claude 模型: " + model);
+        ilinkService.sendText(userId, "已设置 Claude 模型: " + model, contextToken);
     }
 
-    private void handleQuickToggle(String userId, String type, String[] parts) {
+    private void handleQuickToggle(String userId, String type, String[] parts, String contextToken) {
         boolean newValue = true;
         if (parts.length >= 2) {
             newValue = Boolean.parseBoolean(parts[1].toLowerCase());
@@ -324,7 +324,7 @@ public class MessageRouter {
             case "fileedit" -> filterConfig.setShowFileEdit(newValue);
         }
 
-        ilinkService.sendText(userId, type + " 已设置为: " + (newValue ? "显示" : "隐藏"));
+        ilinkService.sendText(userId, type + " 已设置为: " + (newValue ? "显示" : "隐藏"), contextToken);
     }
 
     private boolean getCurrentFilterState(String type) {
@@ -336,29 +336,29 @@ public class MessageRouter {
         };
     }
 
-    private void handleTokenCommand(String userId, String[] parts) {
+    private void handleTokenCommand(String userId, String[] parts, String contextToken) {
         if (parts.length >= 2) {
             // 设置 token 统计开关
             boolean value = Boolean.parseBoolean(parts[1].toLowerCase());
             filterConfig.setShowTokenUsage(value);
-            ilinkService.sendText(userId, "Token 统计已设置为: " + (value ? "显示" : "隐藏"));
+            ilinkService.sendText(userId, "Token 统计已设置为: " + (value ? "显示" : "隐藏"), contextToken);
         } else {
             // 显示当前 token 使用情况
             String usage = claudeApiService.getTokenUsageSummary(userId);
-            ilinkService.sendText(userId, "当前 Token 使用:\n" + usage);
+            ilinkService.sendText(userId, "当前 Token 使用:\n" + usage, contextToken);
         }
     }
 
-    private void handleClaudePathCommand(String userId, String[] parts) {
+    private void handleClaudePathCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
             String currentPath = claudeApiService.getInstallPath();
-            ilinkService.sendText(userId, "用法: v-claude <path>\n当前路径: " + (currentPath != null ? currentPath : "自动检测"));
+            ilinkService.sendText(userId, "用法: v-claude <path>\n当前路径: " + (currentPath != null ? currentPath : "自动检测"), contextToken);
             return;
         }
 
         String path = parts[1];
         claudeApiService.setInstallPath(path);
-        ilinkService.sendText(userId, "已设置 Claude 安装路径: " + path);
+        ilinkService.sendText(userId, "已设置 Claude 安装路径: " + path, contextToken);
     }
 
     private boolean checkMessageLimit(String userId) {

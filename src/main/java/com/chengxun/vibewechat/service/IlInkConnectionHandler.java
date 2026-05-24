@@ -131,7 +131,7 @@ public class IlInkConnectionHandler {
         }
     }
 
-    public void sendText(String userId, String text) {
+    public void sendText(String userId, String text, String contextToken) {
         if (!connected || botToken.isEmpty()) {
             log.warn("Not connected to ilink");
             return;
@@ -139,11 +139,16 @@ public class IlInkConnectionHandler {
         try {
             String url = baseUrl + "/ilink/bot/sendmessage";
 
+            String escapedText = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+            String contextTokenStr = (contextToken != null && !contextToken.isEmpty()) ?
+                String.format(",\"context_token\":\"%s\"", contextToken) : "";
+
             String jsonBody = String.format(
-                "{\"msg\":{\"from_user_id\":\"\",\"to_user_id\":\"%s\",\"client_id\":\"%s\",\"message_type\":2,\"message_state\":2,\"item_list\":[{\"type\":1,\"text_item\":{\"text\":\"%s\"}}]}}",
+                "{\"msg\":{\"from_user_id\":\"\",\"to_user_id\":\"%s\",\"client_id\":\"%s\",\"message_type\":2,\"message_state\":2%s,\"item_list\":[{\"type\":1,\"text_item\":{\"text\":\"%s\"}}]}}",
                 userId,
                 java.util.UUID.randomUUID().toString(),
-                text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                contextTokenStr,
+                escapedText
             );
 
             HttpRequest request = HttpRequest.newBuilder()
@@ -157,7 +162,7 @@ public class IlInkConnectionHandler {
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            log.info("Send message response: {} - {}", response.statusCode(), response.body());
+            log.info("Send message to {}: {} - {}", userId, response.statusCode(), response.body());
         } catch (Exception e) {
             log.error("Failed to send message", e);
         }
