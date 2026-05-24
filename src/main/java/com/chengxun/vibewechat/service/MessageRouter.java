@@ -59,6 +59,9 @@ public class MessageRouter {
     private static final String V_BLOCK = "v-block";
     private static final String V_UNBLOCK = "v-unblock";
     private static final String V_NOTIFY = "v-notify";
+    private static final String V_SWITCH = "v-switch";
+    private static final String V_SAVE = "v-save";
+    private static final String V_PROFILES = "v-profiles";
 
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
@@ -141,6 +144,9 @@ public class MessageRouter {
             case V_BLOCK -> handleBlockCommand(userId, parts, contextToken);
             case V_UNBLOCK -> handleUnblockCommand(userId, parts, contextToken);
             case V_NOTIFY -> handleNotifyCommand(userId, parts, contextToken);
+            case V_SWITCH -> handleSwitchCommand(userId, parts, contextToken);
+            case V_SAVE -> handleSaveCommand(userId, parts, contextToken);
+            case V_PROFILES -> handleProfilesCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -159,10 +165,13 @@ public class MessageRouter {
                 **🔧 Claude 配置**
                 ━━━━━━━━━━━━━━━━━━━━━━
                 `v-config <key> [model]` 一键配置
-                `v-api <url>`     设置 API 地址
-                `v-key <key>`     设置 API Key
-                `v-model <name>`  设置模型
-                `v-claude <path>` 设置安装路径
+                `v-switch <name>`  切换预设配置
+                `v-save <name>`    保存当前配置
+                `v-profiles`       列出所有预设
+                `v-api <url>`      设置 API 地址
+                `v-key <key>`      设置 API Key
+                `v-model <name>`   设置模型
+                `v-claude <path>`  设置安装路径
 
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **📁 工作目录**
@@ -529,6 +538,54 @@ public class MessageRouter {
         } else {
             ilinkService.sendText(userId, "未找到该关键词: " + keyword, contextToken);
         }
+    }
+
+    private void handleSwitchCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            String profiles = configService.getSwitchProfiles();
+            String active = configService.getActiveProfile();
+            String help = """
+                    **🔄 配置切换**
+
+                    当前激活: `%s`
+
+                    可用配置:
+                    %s
+
+                    **命令:**
+                    `v-switch <name>`  切换到指定配置
+                    `v-switch`        显示当前配置
+
+                    **管理:**
+                    `v-save <name>`   保存当前配置
+                    `v-profiles`      列出所有配置
+                    """.formatted(active.isEmpty() ? "无" : active, profiles);
+            ilinkService.sendText(userId, help, contextToken);
+            return;
+        }
+
+        String profileName = parts[1];
+        if (configService.switchProfile(profileName)) {
+            ilinkService.sendText(userId, "已切换到配置: " + profileName, contextToken);
+        } else {
+            ilinkService.sendText(userId, "未找到配置: " + profileName, contextToken);
+        }
+    }
+
+    private void handleSaveCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-save <配置名>\n保存当前配置为指定名称", contextToken);
+            return;
+        }
+
+        String profileName = parts[1];
+        configService.saveProfile(profileName);
+        ilinkService.sendText(userId, "已保存配置: " + profileName, contextToken);
+    }
+
+    private void handleProfilesCommand(String userId, String[] parts, String contextToken) {
+        String profiles = configService.getSwitchProfiles();
+        ilinkService.sendText(userId, profiles, contextToken);
     }
 
     private void handleNotifyCommand(String userId, String[] parts, String contextToken) {

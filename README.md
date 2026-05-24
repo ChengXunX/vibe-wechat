@@ -71,6 +71,13 @@ v-config your-api-key claude-sonnet-4-20250514
   - 示例：`v-config sk-xxx1234567890`
   - 示例：`v-config sk-xxx1234567890 claude-sonnet-4-20250514`
 
+**配置切换（类似 ccswitch）**
+- `v-switch <name>` - 切换到指定预设配置
+- `v-save <name>` - 保存当前配置为预设
+- `v-profiles` - 列出所有预设配置
+  - 示例：`v-save production` 保存为生产配置
+  - 示例：`v-switch production` 切换到生产配置
+
 **Claude 单独配置**
 - `v-api <url>` - 设置 Claude API 地址（默认: https://api.anthropic.com）
 - `v-key <key>` - 设置 Claude API Key

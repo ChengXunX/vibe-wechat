@@ -2,6 +2,7 @@ package com.chengxun.vibewechat.service;
 
 import com.chengxun.vibewechat.config.ClaudeConfig;
 import com.chengxun.vibewechat.config.FilterConfig;
+import com.chengxun.vibewechat.config.SwitchConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.extern.slf4j.Slf4j;
@@ -11,7 +12,9 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Slf4j
@@ -28,6 +31,8 @@ public class ConfigService {
             .enable(SerializationFeature.INDENT_OUTPUT);
 
     private static final String CONFIG_FILE = "vibe-wechat-config.json";
+
+    private final SwitchConfig switchConfig = new SwitchConfig();
 
     @PostConstruct
     public void init() {
@@ -122,5 +127,58 @@ public class ConfigService {
         } catch (IOException e) {
             log.error("Failed to load config", e);
         }
+    }
+
+    public void saveProfile(String profileName) {
+        SwitchConfig.SwitchProfile profile = new SwitchConfig.SwitchProfile(
+                profileName,
+                claudeConfig.getApiUrl(),
+                claudeConfig.getApiKey(),
+                claudeConfig.getModel()
+        );
+
+        // 更新或添加配置
+        switchConfig.getProfiles().removeIf(p -> p.getName().equals(profileName));
+        switchConfig.getProfiles().add(profile);
+        switchConfig.setActiveProfile(profileName);
+
+        saveConfig();
+    }
+
+    public boolean switchProfile(String profileName) {
+        for (SwitchConfig.SwitchProfile profile : switchConfig.getProfiles()) {
+            if (profile.getName().equals(profileName)) {
+                claudeConfig.setApiUrl(profile.getApiUrl());
+                claudeConfig.setApiKey(profile.getApiKey());
+                claudeConfig.setModel(profile.getModel());
+                switchConfig.setActiveProfile(profileName);
+                saveConfig();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public String getActiveProfile() {
+        return switchConfig.getActiveProfile();
+    }
+
+    public String getSwitchProfiles() {
+        List<SwitchConfig.SwitchProfile> profiles = switchConfig.getProfiles();
+        if (profiles.isEmpty()) {
+            return "暂无保存的配置\n\n使用 `v-save <名称>` 保存当前配置";
+        }
+
+        StringBuilder sb = new StringBuilder("**已保存的配置:**\n");
+        String active = switchConfig.getActiveProfile();
+        for (SwitchConfig.SwitchProfile profile : profiles) {
+            String marker = profile.getName().equals(active) ? " ✅" : "";
+            String maskedKey = profile.getApiKey() != null && profile.getApiKey().length() > 8 ?
+                    profile.getApiKey().substring(0, 4) + "****" : "未设置";
+            sb.append("- `").append(profile.getName()).append("`").append(marker)
+              .append("\n  模型: ").append(profile.getModel())
+              .append("\n  Key: ").append(maskedKey).append("\n");
+        }
+        return sb.toString();
     }
 }
