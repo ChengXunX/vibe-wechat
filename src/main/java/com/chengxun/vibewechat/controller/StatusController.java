@@ -81,6 +81,7 @@ public class StatusController {
                    "      if(d.status==='confirmed'){" +
                    "        document.getElementById('status').innerHTML='<span class=\"connected\">已连接!</span>';" +
                    "        document.getElementById('status').className='connected';" +
+                   "        setTimeout(function(){window.close();},2000);" +
                    "      }else if(d.status==='scaned'){" +
                    "        document.getElementById('status').innerHTML='已扫码，等待确认...';" +
                    "      }" +

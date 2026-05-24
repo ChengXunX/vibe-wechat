@@ -48,38 +48,59 @@ public class IlInkService {
 
     private void handleMessage(String message) {
         log.info("Received message: {}", message);
-        String userId = extractUserId(message);
-        String content = extractContent(message);
 
-        if (userId != null && content != null) {
-            if (!connectedUsers.contains(userId)) {
-                connectedUsers.add(userId);
-                sendText(userId, WELCOME_MESSAGE);
+        // ilink 消息格式: {"msgs":[{"content":"xxx","user_id":"xxx",...}]}
+        try {
+            // 提取 msgs 数组中的消息
+            int msgsStart = message.indexOf("\"msgs\":[");
+            if (msgsStart == -1) return;
+
+            int msgsEnd = message.indexOf("]", msgsStart);
+            if (msgsEnd == -1) return;
+
+            String msgsStr = message.substring(msgsStart + 8, msgsEnd);
+
+            // 简单解析每条消息
+            int msgStart = 0;
+            while (true) {
+                int objStart = msgsStr.indexOf("{", msgStart);
+                if (objStart == -1) break;
+
+                int objEnd = msgsStr.indexOf("}", objStart);
+                if (objEnd == -1) break;
+
+                String msgObj = msgsStr.substring(objStart, objEnd + 1);
+                msgStart = objEnd + 1;
+
+                String userId = extractField(msgObj, "user_id");
+                String content = extractField(msgObj, "content");
+
+                if (userId != null && content != null) {
+                    if (!connectedUsers.contains(userId)) {
+                        connectedUsers.add(userId);
+                        sendText(userId, WELCOME_MESSAGE);
+                    }
+
+                    eventPublisher.publishEvent(new IlInkMessageEvent(this, userId, content));
+                }
             }
-
-            // 发布事件，由 MessageRouter 订阅处理
-            eventPublisher.publishEvent(new IlInkMessageEvent(this, userId, content));
+        } catch (Exception e) {
+            log.error("Failed to parse message: {}", e.getMessage());
         }
     }
 
-    private String extractUserId(String message) {
+    private String extractField(String json, String field) {
         try {
-            int start = message.indexOf("\"user_id\":\"") + 11;
-            int end = message.indexOf("\"", start);
-            return message.substring(start, end);
+            String pattern = "\"" + field + "\":\"";
+            int start = json.indexOf(pattern) + pattern.length();
+            int end = json.indexOf("\"", start);
+            if (start > pattern.length() - 1 && end > start) {
+                return json.substring(start, end);
+            }
         } catch (Exception e) {
-            return null;
+            // ignore
         }
-    }
-
-    private String extractContent(String message) {
-        try {
-            int start = message.indexOf("\"content\":\"") + 11;
-            int end = message.indexOf("\"", start);
-            return message.substring(start, end);
-        } catch (Exception e) {
-            return null;
-        }
+        return null;
     }
 
     public void sendText(String userId, String text) {

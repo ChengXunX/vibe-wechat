@@ -78,23 +78,37 @@ public class IlInkConnectionHandler {
         log.info("Started ilink polling with bot_token");
     }
 
+    private String lastUpdatesBuf = "";
+
     private void pollUpdates() throws Exception {
         String url = baseUrl + "/ilink/bot/getupdates";
+
+        String jsonBody = String.format("{\"get_updates_buf\":\"%s\",\"base_info\":{}}", lastUpdatesBuf);
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + botToken)
-                .POST(HttpRequest.BodyPublishers.ofString("{}"))
-                .timeout(Duration.ofSeconds(30))
+                .header("iLink-App-ClientVersion", "1")
+                .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                .timeout(Duration.ofSeconds(35))
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
         if (response.statusCode() == 200 && messageHandler != null) {
             String body = response.body();
-            if (body != null && !body.isEmpty() && !body.equals("{}")) {
-                messageHandler.accept(body);
+            if (body != null && !body.isEmpty()) {
+                // 更新 get_updates_buf
+                int bufStart = body.indexOf("\"get_updates_buf\":\"") + 19;
+                int bufEnd = body.indexOf("\"", bufStart);
+                if (bufStart > 18 && bufEnd > bufStart) {
+                    lastUpdatesBuf = body.substring(bufStart, bufEnd);
+                }
+
+                // 检查是否有消息
+                if (body.contains("\"msgs\"") && !body.contains("\"msgs\":[]")) {
+                    messageHandler.accept(body);
+                }
             }
         }
     }
