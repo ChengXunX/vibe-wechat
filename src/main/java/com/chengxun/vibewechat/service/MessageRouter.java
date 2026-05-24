@@ -54,6 +54,7 @@ public class MessageRouter {
     private static final String V_FILEEDIT = "v-fileedit";
     private static final String V_TOKEN = "v-token";
     private static final String V_CLAUDE = "v-claude";
+    private static final String V_CONFIG = "v-config";
     private static final String V_CD = "v-cd";
     private static final String V_BLOCK = "v-block";
     private static final String V_UNBLOCK = "v-unblock";
@@ -153,7 +154,10 @@ public class MessageRouter {
             case V_CLEAR -> handleClearSession(userId, contextToken);
             case V_SESSIONS -> handleListSessions(userId, contextToken);
             case V_LIMIT -> handleLimitCommand(userId, parts, contextToken);
+            case V_API -> handleApiCommand(userId, parts, contextToken);
+            case V_KEY -> handleKeyCommand(userId, parts, contextToken);
             case V_MODEL -> handleModelCommand(userId, parts, contextToken);
+            case V_CONFIG -> handleConfigCommand(userId, parts, contextToken);
             case V_TOOLS -> handleQuickToggle(userId, "tools", parts, contextToken);
             case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts, contextToken);
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
@@ -184,9 +188,12 @@ public class MessageRouter {
                 ━━━━━━━━━━━━━━━━━━━━━━
                 **🔧 Claude 配置**
                 ━━━━━━━━━━━━━━━━━━━━━━
+                `v-config <key> [url] [model]` 一键配置
+                `v-api <url>`      设置 API 地址
+                `v-key <key>`      设置 API Key
                 `v-model <name>`   设置模型（支持 [1m] 配置）
                 `v-claude <path>`  设置安装路径
-                `v-thinking <级别>` 开关推理模式 (off/low/medium/high)
+                `v-thinking <级别>` 推理模式 (off/low/medium/high)
                 `v-switch <name>`  切换预设配置
                 `v-save <name>`    保存当前配置
                 `v-profiles`       列出所有预设
