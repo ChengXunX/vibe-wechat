@@ -235,8 +235,8 @@ public class IlInkConnectionHandler {
             return;
         }
         try {
-            String url = baseUrl + "/ilink/bot/send_typing";
-            String jsonBody = String.format("{\"user_id\":\"%s\",\"status\":1}", userId);
+            String url = baseUrl + "/ilink/bot/sendtyping";
+            String jsonBody = String.format("{\"ilink_user_id\":\"%s\",\"typing_ticket\":\"\",\"status\":1}", userId);
 
             log.info("Sending typing status to {}", userId);
 
@@ -260,8 +260,8 @@ public class IlInkConnectionHandler {
     public void sendStopTyping(String userId) {
         if (!connected || botToken.isEmpty()) return;
         try {
-            String url = baseUrl + "/ilink/bot/send_typing";
-            String jsonBody = String.format("{\"user_id\":\"%s\",\"status\":0}", userId);
+            String url = baseUrl + "/ilink/bot/sendtyping";
+            String jsonBody = String.format("{\"ilink_user_id\":\"%s\",\"typing_ticket\":\"\",\"status\":2}", userId);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))

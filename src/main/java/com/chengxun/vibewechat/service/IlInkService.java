@@ -22,7 +22,7 @@ public class IlInkService {
     private final Set<String> connectedUsers = ConcurrentHashMap.newKeySet();
 
     private static final String WELCOME_MESSAGE = """
-            **🎉 欢迎使用 Vibe We Chat!**
+            **🎉 欢迎使用 VibeWechat!**
 
             ━━━━━━━━━━━━━━━━━━━━━━
             **⚡ 快速开始**

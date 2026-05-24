@@ -346,11 +346,13 @@ public class MessageRouter {
 
     private void handleNewSession(String userId, String contextToken) {
         claudeApiService.clearHistory(userId);
-        ilinkService.sendText(userId, "已创建新会话", contextToken);
+        ilinkService.sendText(userId, "已创建新会话，Claude 将开始新的对话", contextToken);
     }
 
     private void handleListSessions(String userId, String contextToken) {
-        ilinkService.sendText(userId, "当前会话: " + userId, contextToken);
+        String sessionId = claudeApiService.getSessionId(userId);
+        String sessionInfo = sessionId != null ? sessionId : "无活跃会话";
+        ilinkService.sendText(userId, "当前 Claude 会话:\n📋 " + sessionInfo, contextToken);
     }
 
     private void handleClearSession(String userId, String contextToken) {
