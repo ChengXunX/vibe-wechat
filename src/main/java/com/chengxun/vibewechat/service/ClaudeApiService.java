@@ -29,6 +29,7 @@ public class ClaudeApiService {
     private final Map<String, List<Map<String, String>>> conversationHistory = new ConcurrentHashMap<>();
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
+    private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
 
     @PostConstruct
     public void init() {
@@ -226,7 +227,13 @@ public class ClaudeApiService {
             // 保存 session_id 用于维持上下文
             com.fasterxml.jackson.databind.JsonNode sessionNode = root.get("session_id");
             if (sessionNode != null) {
-                sessionIds.put(userId, sessionNode.asText());
+                String sessionId = sessionNode.asText();
+                sessionIds.put(userId, sessionId);
+                // 添加到会话历史
+                sessionHistory.computeIfAbsent(userId, k -> new java.util.ArrayList<>());
+                if (!sessionHistory.get(userId).contains(sessionId)) {
+                    sessionHistory.get(userId).add(sessionId);
+                }
             }
 
             // 解析 token 使用量
@@ -268,10 +275,24 @@ public class ClaudeApiService {
         conversationHistory.remove(userId);
         tokenUsageMap.remove(userId);
         sessionIds.remove(userId);
+        sessionHistory.remove(userId);
     }
 
     public String getSessionId(String userId) {
         return sessionIds.get(userId);
+    }
+
+    public List<String> getSessionHistory(String userId) {
+        return sessionHistory.getOrDefault(userId, new ArrayList<>());
+    }
+
+    public boolean switchSession(String userId, String sessionId) {
+        List<String> history = sessionHistory.get(userId);
+        if (history != null && history.contains(sessionId)) {
+            sessionIds.put(userId, sessionId);
+            return true;
+        }
+        return false;
     }
 
     public List<Map<String, String>> getHistory(String userId) {

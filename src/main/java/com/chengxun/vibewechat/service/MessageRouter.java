@@ -334,6 +334,28 @@ public class MessageRouter {
         ilinkService.sendText(userId, "已更新: " + key + " = " + value, contextToken);
     }
 
+    private void handleNewSession(String userId, String contextToken) {
+        claudeApiService.clearHistory(userId);
+        ilinkService.sendText(userId, "已创建新会话，Claude 将开始新的对话", contextToken);
+    }
+
+    private void handleListSessions(String userId, String contextToken) {
+        String currentSession = claudeApiService.getSessionId(userId);
+        java.util.List<String> history = claudeApiService.getSessionHistory(userId);
+
+        StringBuilder sb = new StringBuilder("**会话列表:**\n");
+        if (history.isEmpty()) {
+            sb.append("暂无历史会话");
+        } else {
+            for (int i = 0; i < history.size(); i++) {
+                String session = history.get(i);
+                String marker = session.equals(currentSession) ? " ✅ 当前" : "";
+                sb.append(i + 1).append(". `").append(session).append("`").append(marker).append("\n");
+            }
+        }
+        ilinkService.sendText(userId, sb.toString(), contextToken);
+    }
+
     private void handleSessionCommand(String userId, String[] parts, String contextToken) {
         if (parts.length < 2) {
             ilinkService.sendText(userId, "用法: v-session <session_id>", contextToken);
@@ -341,18 +363,11 @@ public class MessageRouter {
         }
 
         String sessionId = parts[1];
-        ilinkService.sendText(userId, "已切换到会话: " + sessionId, contextToken);
-    }
-
-    private void handleNewSession(String userId, String contextToken) {
-        claudeApiService.clearHistory(userId);
-        ilinkService.sendText(userId, "已创建新会话，Claude 将开始新的对话", contextToken);
-    }
-
-    private void handleListSessions(String userId, String contextToken) {
-        String sessionId = claudeApiService.getSessionId(userId);
-        String sessionInfo = sessionId != null ? sessionId : "无活跃会话";
-        ilinkService.sendText(userId, "当前 Claude 会话:\n📋 " + sessionInfo, contextToken);
+        if (claudeApiService.switchSession(userId, sessionId)) {
+            ilinkService.sendText(userId, "已切换到会话: " + sessionId, contextToken);
+        } else {
+            ilinkService.sendText(userId, "未找到会话: " + sessionId + "\n使用 v-sessions 查看可用会话", contextToken);
+        }
     }
 
     private void handleClearSession(String userId, String contextToken) {

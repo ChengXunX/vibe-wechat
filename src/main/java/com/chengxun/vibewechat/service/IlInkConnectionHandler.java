@@ -229,14 +229,45 @@ public class IlInkConnectionHandler {
         return result.strip();
     }
 
+    private String getTypingTicket(String userId) {
+        try {
+            String url = baseUrl + "/ilink/bot/getconfig";
+            String jsonBody = String.format("{\"ilink_user_id\":\"%s\"}", userId);
+
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("AuthorizationType", "ilink_bot_token")
+                    .header("Authorization", "Bearer " + botToken)
+                    .header("X-WECHAT-UIN", randomUin())
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody))
+                    .timeout(Duration.ofSeconds(5))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 200) {
+                String body = response.body();
+                int start = body.indexOf("\"typing_ticket\":\"") + 17;
+                int end = body.indexOf("\"", start);
+                if (start > 16 && end > start) {
+                    return body.substring(start, end);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Failed to get typing ticket: {}", e.getMessage());
+        }
+        return "";
+    }
+
     public void sendTyping(String userId) {
         if (!connected || botToken.isEmpty()) {
             log.info("Cannot send typing: connected={}, tokenEmpty={}", connected, botToken.isEmpty());
             return;
         }
         try {
+            String typingTicket = getTypingTicket(userId);
             String url = baseUrl + "/ilink/bot/sendtyping";
-            String jsonBody = String.format("{\"ilink_user_id\":\"%s\",\"typing_ticket\":\"\",\"status\":1}", userId);
+            String jsonBody = String.format("{\"ilink_user_id\":\"%s\",\"typing_ticket\":\"%s\",\"status\":1}", userId, typingTicket);
 
             log.info("Sending typing status to {}", userId);
 
@@ -260,8 +291,9 @@ public class IlInkConnectionHandler {
     public void sendStopTyping(String userId) {
         if (!connected || botToken.isEmpty()) return;
         try {
+            String typingTicket = getTypingTicket(userId);
             String url = baseUrl + "/ilink/bot/sendtyping";
-            String jsonBody = String.format("{\"ilink_user_id\":\"%s\",\"typing_ticket\":\"\",\"status\":2}", userId);
+            String jsonBody = String.format("{\"ilink_user_id\":\"%s\",\"typing_ticket\":\"%s\",\"status\":2}", userId, typingTicket);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
