@@ -120,10 +120,12 @@ public class MessageRouter {
             }
 
             @Override
-            public void onSubtaskStatus(String userId, String status) {
-                if (filterConfig.isShowSubtaskStatus()) {
+            public void onSubtaskStatus(String userId, String status, boolean isCompleted) {
+                boolean shouldNotify = isCompleted ? filterConfig.isShowSubtaskCompletion() : filterConfig.isShowSubtaskStatus();
+                if (shouldNotify) {
                     String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "🔄 " + status, contextToken != null ? contextToken : "", "sub_result");
+                    String messageType = isCompleted ? "subtask_completion" : "sub_result";
+                    ilinkService.sendText(userId, status, contextToken != null ? contextToken : "", messageType);
                 }
             }
         });
@@ -297,42 +299,58 @@ public class MessageRouter {
 
     private void showHelp(String userId, String contextToken) {
         String help = """
-                **vibe-wechat 命令列表**
+                **VibeWeChat 命令列表**
 
-                `v-help` 显示此帮助
-                `v-status` 显示当前配置
+                | 命令 | 说明 |
+                |------|------|
+                | `v-help` | 显示此帮助 |
+                | `v-status` | 显示当前配置 |
 
                 **Claude 配置**
-                `v-config <key> [url] [model]` 一键配置
-                `v-api <url>` API 地址
-                `v-key <key>` API Key
-                `v-model <name>` 模型
-                `v-claude <path>` 安装路径
-                `v-thinking <级别>` 推理模式 (low/medium/high/max/off)
-                `v-switch <name>` 切换配置
-                `v-save <name>` 保存配置
-                `v-profiles` 列出预设
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-config <key> [url] [model]` | 一键配置 |
+                | `v-api <url>` | API 地址 |
+                | `v-key <key>` | API Key |
+                | `v-model <name>` | 模型 |
+                | `v-claude <path>` | 安装路径 |
+                | `v-thinking <级别>` | 推理模式 (low/medium/high/max/off) |
+                | `v-switch <name>` | 切换配置 |
+                | `v-save <name>` | 保存配置 |
+                | `v-profiles` | 列出预设 |
 
                 **工作目录**
-                `v-cd <path>` 切换目录
 
-                **通知配置**
-                `v-tools` 工具调用通知
-                `v-fileread` 文件读取通知
-                `v-fileedit` 文件编辑通知
-                `v-filter` 高级过滤
-                `v-notify` 消息状态通知
+                | 命令 | 说明 |
+                |------|------|
+                | `v-cd <path>` | 切换目录 |
+
+                **通知配置** (true/false)
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-notify` | 消息状态通知 |
+                | `v-tools` | 工具调用通知 |
+                | `v-fileread` | 文件读取通知 |
+                | `v-fileedit` | 文件编辑通知 |
+                | `v-filter tools/fileread/fileedit/notify <true/false>` | 精细控制 |
 
                 **关键词过滤**
-                `v-block <词>` 添加过滤
-                `v-unblock <词>` 移除过滤
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-block <词>` | 添加过滤 |
+                | `v-unblock <词>` | 移除过滤 |
 
                 **会话管理**
-                `v-new` 新建会话
-                `v-clear` 清空会话
-                `v-sessions` 列出会话
-                `v-session <id>` 切换会话
-                `v-delete <id>` 删除会话
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-new` / `v-clear` | 新建/清空会话 |
+                | `v-sessions` | 列出会话 |
+                | `v-session <id>` | 切换会话 |
+                | `v-delete <id>` | 删除会话 |
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
@@ -344,10 +362,10 @@ public class MessageRouter {
         String activeProfile = configService.getActiveProfile();
 
         String status = String.format("""
-                **📋 系统状态**
+                **VibeWeChat 系统状态**
 
                 | 配置项 | 值 |
-                |---|---|
+                |--------|-----|
                 | API | `%s` |
                 | 模型 | `%s` |
                 | 路径 | `%s` |
@@ -357,7 +375,7 @@ public class MessageRouter {
                 **当前会话**
 
                 | 项目 | 值 |
-                |---|---|
+                |------|-----|
                 | 会话ID | `%s` |
                 | 历史会话 | %d 个 |
                 | 工作目录 | `%s` |
@@ -365,26 +383,26 @@ public class MessageRouter {
                 **Token 用量**
 
                 | 输入 | 输出 | 总计 |
-                |---|---|---|
+                |------|------|------|
                 | %s | %s | %s |
 
-                **通知配置**
+                **通知配置** (使用 `v-filter` 修改)
 
-                | 通知项 | 状态 |
-                |---|---|
-                | 消息状态 | %s |
-                | 工具调用 | %s |
-                | 文件读取 | %s |
-                | 文件编辑 | %s |
-                | 子任务状态 | %s |
-                | 任务完成 | %s |
-                | Token统计 | %s |
-                | 子任务完成 | %s |
+                | 通知项 | 状态 | 说明 |
+                |--------|------|------|
+                | 消息状态 | %s | 收到消息时提示 |
+                | 工具调用 | %s | 显示工具调用详情 |
+                | 文件读取 | %s | 显示文件读取操作 |
+                | 文件编辑 | %s | 显示文件编辑操作 |
+                | 子任务状态 | %s | 子任务创建/更新通知 |
+                | 子任务完成 | %s | 子任务完成通知 |
+                | 任务完成 | %s | 任务完成摘要 |
+                | Token统计 | %s | 显示Token消耗 |
 
                 **其他**
 
                 | 项目 | 值 |
-                |---|---|
+                |------|-----|
                 | 关键词过滤 | %d 个 |
                 """,
                 claudeApiService.getApiUrl() != null ? claudeApiService.getApiUrl() : "未设置",
@@ -403,9 +421,9 @@ public class MessageRouter {
                 filterConfig.isShowFileRead() ? "✅" : "❌",
                 filterConfig.isShowFileEdit() ? "✅" : "❌",
                 filterConfig.isShowSubtaskStatus() ? "✅" : "❌",
+                filterConfig.isShowSubtaskCompletion() ? "✅" : "❌",
                 filterConfig.isShowTaskCompletion() ? "✅" : "❌",
                 filterConfig.isShowTokenUsage() ? "✅" : "❌",
-                filterConfig.isShowSubtaskCompletion() ? "✅" : "❌",
                 filterConfig.getBlockedKeywords().size());
         ilinkService.sendText(userId, status, contextToken);
     }

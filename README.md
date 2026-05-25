@@ -40,28 +40,71 @@ cd /home/chengxun/vibe-wechat
 
 ## 微信命令
 
+### 基础命令
+
 | 命令 | 说明 |
 |------|------|
 | `v-help` | 显示所有命令 |
 | `v-status` | 显示当前配置 |
+
+### Claude 配置
+
+| 命令 | 说明 |
+|------|------|
 | `v-config <key> <url> <model>` | 一键配置 |
-| `v-model <name>` | 设置模型 |
-| `v-claude <path>` | 设置安装路径 |
-| `v-thinking <级别>` | 推理模式 |
+| `v-api <url>` | API 地址 |
+| `v-key <key>` | API Key |
+| `v-model <name>` | 模型 |
+| `v-claude <path>` | 安装路径 |
+| `v-thinking <级别>` | 推理模式 (low/medium/high/max/off) |
 | `v-switch <name>` | 切换配置 |
 | `v-save <name>` | 保存配置 |
+| `v-profiles` | 列出预设 |
+
+### 工作目录
+
+| 命令 | 说明 |
+|------|------|
 | `v-cd <path>` | 切换工作目录 |
+
+### 通知配置
+
+| 命令 | 说明 |
+|------|------|
+| `v-notify` | 消息状态通知 |
 | `v-tools` | 工具调用通知 |
 | `v-fileread` | 文件读取通知 |
 | `v-fileedit` | 文件编辑通知 |
+| `v-filter tools/fileread/fileedit/notify <true/false>` | 精细控制 |
+
+### 关键词过滤
+
+| 命令 | 说明 |
+|------|------|
 | `v-block <词>` | 添加过滤关键词 |
 | `v-unblock <词>` | 移除过滤关键词 |
-| `v-notify` | 消息状态通知 |
-| `v-new` | 新建会话 |
-| `v-clear` | 清空会话 |
+
+### 会话管理
+
+| 命令 | 说明 |
+|------|------|
+| `v-new` / `v-clear` | 新建/清空会话 |
 | `v-sessions` | 列出会话 |
 | `v-session <id>` | 切换会话 |
 | `v-delete <id>` | 删除会话 |
+
+## 通知配置说明
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| 消息状态 | ❌ | 收到消息时显示处理状态 |
+| 工具调用 | ❌ | 显示 Claude 工具调用详情 |
+| 文件读取 | ❌ | 显示文件读取操作 |
+| 文件编辑 | ❌ | 显示文件编辑操作 |
+| 子任务状态 | ✅ | 子任务创建/更新通知 |
+| 子任务完成 | ✅ | 子任务完成通知 |
+| 任务完成 | ✅ | 任务完成摘要 |
+| Token统计 | ✅ | 显示 Token 消耗 |
 
 ## 配置
 
@@ -90,6 +133,9 @@ vibe-wechat:
     show-tool-calls: false
     show-file-read: false
     show-file-edit: false
+    show-subtask-completion: true
+    show-task-completion: true
+    show-token-usage: true
 ```
 
 ## 项目结构

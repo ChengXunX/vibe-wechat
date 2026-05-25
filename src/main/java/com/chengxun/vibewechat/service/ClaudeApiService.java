@@ -233,7 +233,8 @@ public class ClaudeApiService {
                                                 if (isSubtaskTool(toolName)) {
                                                     String subtaskStatus = extractSubtaskStatus(toolName, toolInput);
                                                     if (subtaskStatus != null) {
-                                                        toolCallback.onSubtaskStatus(userId, subtaskStatus);
+                                                        boolean isCompleted = isSubtaskCompleted(toolName, toolInput);
+                                                        toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted);
                                                     }
                                                 }
                                             }
@@ -295,7 +296,7 @@ public class ClaudeApiService {
     public interface ToolCallback {
         void onToolUse(String userId, String toolName, String toolInput);
         void onToolResult(String userId, String result);
-        void onSubtaskStatus(String userId, String status);
+        void onSubtaskStatus(String userId, String status, boolean isCompleted);
     }
 
     private ToolCallback toolCallback;
@@ -317,6 +318,9 @@ public class ClaudeApiService {
                 case "TaskUpdate" -> {
                     String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
                     String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
+                    if ("completed".equals(status)) {
+                        yield "✅ 子任务完成" + (subject.isEmpty() ? "" : ": " + subject);
+                    }
                     yield "🔄 子任务 " + status + (subject.isEmpty() ? "" : ": " + subject);
                 }
                 case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
@@ -326,6 +330,18 @@ public class ClaudeApiService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private boolean isSubtaskCompleted(String toolName, String toolInput) {
+        try {
+            if ("TaskUpdate".equals(toolName)) {
+                com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
+                return inputNode.has("status") && "completed".equals(inputNode.get("status").asText());
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        return false;
     }
 
     private String parseJsonResponse(String userId, String json) {
