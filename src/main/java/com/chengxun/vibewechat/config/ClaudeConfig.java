@@ -13,7 +13,5 @@ public class ClaudeConfig {
     private String model = "claude-sonnet-4-20250514";
     private int maxTokens = 4096;
     private String installPath = "";
-    private boolean thinkingEnabled = false;
-    private int thinkingBudgetTokens = 10000;
     private int contextWindowSize = 200000;
 }

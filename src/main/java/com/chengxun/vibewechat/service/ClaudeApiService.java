@@ -2,6 +2,7 @@ package com.chengxun.vibewechat.service;
 
 import com.chengxun.vibewechat.config.ClaudeConfig;
 import com.chengxun.vibewechat.config.FilterConfig;
+import com.chengxun.vibewechat.config.ThinkingConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -25,6 +26,9 @@ public class ClaudeApiService {
 
     @Autowired
     private FilterConfig filterConfig;
+
+    @Autowired
+    private ThinkingConfig thinkingConfig;
 
     private final Map<String, List<Map<String, String>>> conversationHistory = new ConcurrentHashMap<>();
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
@@ -517,9 +521,9 @@ public class ClaudeApiService {
         sb.append("\"max_tokens\":").append(claudeConfig.getMaxTokens()).append(",");
 
         // 添加 thinking 模式支持
-        if (claudeConfig.isThinkingEnabled()) {
+        if (thinkingConfig.isEnabled()) {
             sb.append("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":")
-              .append(claudeConfig.getThinkingBudgetTokens()).append("},");
+              .append(thinkingConfig.getCurrentBudgetTokens()).append("},");
         }
 
         sb.append("\"messages\":[");
@@ -594,10 +598,12 @@ public class ClaudeApiService {
     public void setModel(String model) { claudeConfig.setModel(model); }
     public String getInstallPath() { return claudeConfig.getInstallPath(); }
     public void setInstallPath(String path) { claudeConfig.setInstallPath(path); }
-    public boolean isThinkingEnabled() { return claudeConfig.isThinkingEnabled(); }
-    public void setThinkingEnabled(boolean enabled) { claudeConfig.setThinkingEnabled(enabled); }
-    public int getThinkingBudgetTokens() { return claudeConfig.getThinkingBudgetTokens(); }
-    public void setThinkingBudgetTokens(int budget) { claudeConfig.setThinkingBudgetTokens(budget); }
     public int getContextWindowSize() { return claudeConfig.getContextWindowSize(); }
     public void setContextWindowSize(int size) { claudeConfig.setContextWindowSize(size); }
+
+    // ThinkingConfig getters
+    public String getThinkingLevel() { return thinkingConfig.getLevel(); }
+    public void setThinkingLevel(String level) { thinkingConfig.setLevel(level); }
+    public boolean isThinkingEnabled() { return thinkingConfig.isEnabled(); }
+    public int getThinkingBudgetTokens() { return thinkingConfig.getCurrentBudgetTokens(); }
 }

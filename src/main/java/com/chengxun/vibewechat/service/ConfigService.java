@@ -3,6 +3,7 @@ package com.chengxun.vibewechat.service;
 import com.chengxun.vibewechat.config.ClaudeConfig;
 import com.chengxun.vibewechat.config.FilterConfig;
 import com.chengxun.vibewechat.config.SwitchConfig;
+import com.chengxun.vibewechat.config.ThinkingConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,9 @@ public class ConfigService {
     @Autowired
     private FilterConfig filterConfig;
 
+    @Autowired
+    private ThinkingConfig thinkingConfig;
+
     private final ObjectMapper objectMapper = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
 
@@ -49,6 +53,11 @@ public class ConfigService {
             claude.put("model", claudeConfig.getModel());
             claude.put("installPath", claudeConfig.getInstallPath());
             config.put("claude", claude);
+
+            Map<String, Object> thinking = new HashMap<>();
+            thinking.put("level", thinkingConfig.getLevel());
+            thinking.put("levels", thinkingConfig.getLevels());
+            config.put("thinking", thinking);
 
             Map<String, Object> filter = new HashMap<>();
             filter.put("showToolCalls", filterConfig.isShowToolCalls());
@@ -111,6 +120,19 @@ public class ConfigService {
                 }
                 if (claude.containsKey("installPath") && claude.get("installPath") != null) {
                     claudeConfig.setInstallPath((String) claude.get("installPath"));
+                }
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> thinking = (Map<String, Object>) config.get("thinking");
+            if (thinking != null) {
+                if (thinking.containsKey("level") && thinking.get("level") != null) {
+                    thinkingConfig.setLevel((String) thinking.get("level"));
+                }
+                if (thinking.containsKey("levels") && thinking.get("levels") != null) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<String> levels = (java.util.List<String>) thinking.get("levels");
+                    thinkingConfig.setLevels(levels);
                 }
             }
 

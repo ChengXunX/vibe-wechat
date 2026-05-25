@@ -1,6 +1,7 @@
 package com.chengxun.vibewechat.service;
 
 import com.chengxun.vibewechat.config.FilterConfig;
+import com.chengxun.vibewechat.config.ThinkingConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
@@ -28,6 +29,9 @@ public class MessageRouter {
 
     @Autowired
     private ConfigService configService;
+
+    @Autowired
+    private ThinkingConfig thinkingConfig;
 
     private final Map<String, String> userContextTokens = new ConcurrentHashMap<>();
     private final Map<String, Boolean> warningSent = new ConcurrentHashMap<>();
@@ -240,14 +244,20 @@ public class MessageRouter {
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
             case V_TOKEN -> { String usage = claudeApiService.getTokenUsageSummary(userId); ilinkService.sendText(userId, "Token: " + usage, contextToken); }
             case V_CLAUDE -> { if (parts.length > 1) { claudeApiService.setInstallPath(parts[1]); ilinkService.sendText(userId, "已设置路径: " + parts[1], contextToken); } }
-            case V_CD -> { if (parts.length > 1) { System.setProperty("user.dir", parts[1]); ilinkService.sendText(userId, "工作目录: " + parts[1], contextToken); } }
+            case V_CD -> {
+                if (parts.length > 1) {
+                    System.setProperty("user.dir", parts[1]);
+                    claudeApiService.clearHistory(userId);
+                    ilinkService.sendText(userId, "工作目录: " + parts[1] + "\n会话已重置", contextToken);
+                }
+            }
             case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }
             case V_UNBLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().remove(kw); ilinkService.sendText(userId, "已移除: " + kw, contextToken); } }
             case V_NOTIFY -> { if (parts.length > 1) { filterConfig.setShowMessageStatus(Boolean.parseBoolean(parts[1])); ilinkService.sendText(userId, "通知: " + (filterConfig.isShowMessageStatus() ? "开启" : "关闭"), contextToken); } }
             case V_SWITCH -> handleSwitchCommand(userId, parts, contextToken);
             case V_SAVE -> handleSaveCommand(userId, parts, contextToken);
             case V_PROFILES -> handleProfilesCommand(userId, parts, contextToken);
-            case V_THINKING -> { if (parts.length > 1) { boolean on = !parts[1].equalsIgnoreCase("off"); claudeApiService.setThinkingEnabled(on); ilinkService.sendText(userId, "推理模式: " + (on ? "开启" : "关闭"), contextToken); } }
+            case V_THINKING -> handleThinkingCommand(userId, parts, contextToken);
             case V_DELETE -> handleDeleteSessionCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
@@ -282,7 +292,7 @@ public class MessageRouter {
                 `v-key <key>` API Key
                 `v-model <name>` 模型
                 `v-claude <path>` 安装路径
-                `v-thinking <级别>` 推理模式
+                `v-thinking <级别>` 推理模式 (low/medium/high/max/off)
                 `v-switch <name>` 切换配置
                 `v-save <name>` 保存配置
                 `v-profiles` 列出预设
@@ -364,7 +374,7 @@ public class MessageRouter {
                 claudeApiService.getApiUrl() != null ? claudeApiService.getApiUrl() : "未设置",
                 claudeApiService.getModel() != null ? claudeApiService.getModel() : "未设置",
                 claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
-                claudeApiService.isThinkingEnabled() ? "✅ 开启" : "❌ 关闭",
+                claudeApiService.isThinkingEnabled() ? thinkingConfig.getLevel() + " (" + thinkingConfig.getCurrentBudgetTokens() + " tokens)" : "❌ 关闭",
                 activeProfile != null && !activeProfile.isEmpty() ? activeProfile : "无",
                 sessionId != null ? sessionId : "无",
                 sessionCount,
@@ -475,6 +485,28 @@ public class MessageRouter {
             ilinkService.sendText(userId, "已删除: " + parts[1], contextToken);
         } else {
             ilinkService.sendText(userId, "用法: v-delete <session_id>", contextToken);
+        }
+    }
+
+    private void handleThinkingCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length > 1) {
+            String level = parts[1].toLowerCase();
+            if (level.equals("off")) {
+                thinkingConfig.setLevel("off");
+                configService.saveConfig();
+                ilinkService.sendText(userId, "推理模式: 关闭", contextToken);
+            } else if (thinkingConfig.getLevels().contains(level)) {
+                thinkingConfig.setLevel(level);
+                configService.saveConfig();
+                ilinkService.sendText(userId, "推理模式: " + level + " (budget: " + thinkingConfig.getCurrentBudgetTokens() + " tokens)", contextToken);
+            } else {
+                ilinkService.sendText(userId, "无效级别，可选: " + String.join(", ", thinkingConfig.getLevels()) + ", off", contextToken);
+            }
+        } else {
+            // 循环切换级别
+            String newLevel = thinkingConfig.cycleLevel();
+            configService.saveConfig();
+            ilinkService.sendText(userId, "推理模式: " + newLevel + " (budget: " + thinkingConfig.getCurrentBudgetTokens() + " tokens)", contextToken);
         }
     }
 }
