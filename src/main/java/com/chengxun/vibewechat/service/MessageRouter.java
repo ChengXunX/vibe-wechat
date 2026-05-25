@@ -65,7 +65,6 @@ public class MessageRouter {
     private static final String V_DELETE = "v-delete";
     private static final String V_SUBTASK = "v-subtask";
     private static final String V_SUBTASK_DONE = "v-subtask-done";
-    private static final String V_TOKEN = "v-token";
 
     // 彩蛋关键词映射 - 隐藏彩蛋，不主动提示
     private final Map<String, String> easterEggs = new ConcurrentHashMap<>();
@@ -313,58 +312,46 @@ public class MessageRouter {
         String help = """
                 **VibeWeChat 命令列表**
 
-                | 命令 | 说明 |
-                |------|------|
-                | `v-help` | 显示此帮助 |
-                | `v-status` | 显示当前配置 |
+                **基础命令**
+                | 命令 | 说明 | 命令 | 说明 |
+                |------|------|------|------|
+                | `v-help` | 显示此帮助 | `v-status` | 显示当前配置 |
 
                 **Claude 配置**
+                | 命令 | 说明 | 命令 | 说明 |
+                |------|------|------|------|
+                | `v-model <name>` | 设置模型 | `v-thinking <级别>` | 推理模式 |
+                | `v-claude <path>` | 安装路径 | `v-api <url>` | API 地址 |
+                | `v-key <key>` | API Key | `v-cd <path>` | 切换工作目录 |
+                | `v-config <key> [url] [model]` | 一键配置 | | |
 
-                | 命令 | 说明 |
-                |------|------|
-                | `v-config <key> [url] [model]` | 一键配置 |
-                | `v-api <url>` | API 地址 |
-                | `v-key <key>` | API Key |
-                | `v-model <name>` | 模型 |
-                | `v-claude <path>` | 安装路径 |
-                | `v-thinking <级别>` | 推理模式 (low/medium/high/max/off) |
-                | `v-switch <name>` | 切换配置 |
-                | `v-save <name>` | 保存配置 |
-                | `v-profiles` | 列出预设 |
-
-                **工作目录**
-
-                | 命令 | 说明 |
-                |------|------|
-                | `v-cd <path>` | 切换目录 |
+                **推理模式** (v-thinking)
+                | 级别 | 说明 | 级别 | 说明 |
+                |------|------|------|------|
+                | `low` | 1k tokens | `medium` | 5k tokens |
+                | `high` | 10k tokens | `max` | 32k tokens |
+                | `off` | 关闭推理 | | |
 
                 **通知配置** (true/false)
-
-                | 命令 | 说明 |
-                |------|------|
-                | `v-notify` | 消息状态通知 |
-                | `v-tools` | 工具调用通知 |
-                | `v-fileread` | 文件读取通知 |
-                | `v-fileedit` | 文件编辑通知 |
-                | `v-subtask <true/false>` | 子任务状态通知 |
-                | `v-subtask-done <true/false>` | 子任务完成通知 |
-                | `v-token` / `v-token <true/false>` | 查看/开关Token统计 |
-
-                **关键词过滤**
-
-                | 命令 | 说明 |
-                |------|------|
-                | `v-block <词>` | 添加过滤 |
-                | `v-unblock <词>` | 移除过滤 |
+                | 命令 | 说明 | 命令 | 说明 |
+                |------|------|------|------|
+                | `v-notify` | 消息状态通知 | `v-tools` | 工具调用通知 |
+                | `v-fileread` | 文件读取通知 | `v-fileedit` | 文件编辑通知 |
+                | `v-subtask` | 子任务状态通知 | `v-subtask-done` | 子任务完成通知 |
+                | `v-token` | 查看/开关Token统计 | | |
 
                 **会话管理**
+                | 命令 | 说明 | 命令 | 说明 |
+                |------|------|------|------|
+                | `v-new` / `v-clear` | 新建/清空会话 | `v-sessions` | 列出会话 |
+                | `v-session <id>` | 切换会话 | `v-delete <id>` | 删除会话 |
+                | `v-switch <name>` | 切换配置 | `v-save <name>` | 保存配置 |
+                | `v-profiles` | 列出预设 | | |
 
-                | 命令 | 说明 |
-                |------|------|
-                | `v-new` / `v-clear` | 新建/清空会话 |
-                | `v-sessions` | 列出会话 |
-                | `v-session <id>` | 切换会话 |
-                | `v-delete <id>` | 删除会话 |
+                **关键词过滤**
+                | 命令 | 说明 | 命令 | 说明 |
+                |------|------|------|------|
+                | `v-block <词>` | 添加过滤 | `v-unblock <词>` | 移除过滤 |
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
