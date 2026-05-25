@@ -403,8 +403,11 @@ public class ClaudeApiService {
         String duration = formatDuration(durationMs);
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
-        return String.format("---\n📊 Token: %s in / %s out | ⏱️ %s%s",
-                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo);
+        int contextWindow = claudeConfig.getContextWindowSize();
+        int contextPercent = contextWindow > 0 ? (int) (usage.inputTokens * 100.0 / contextWindow) : 0;
+        String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
+        return String.format("---\n📊 Token: %s in / %s out | ⏱️ %s%s%s",
+                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo);
     }
 
     private String formatTokens(int tokens) {
@@ -584,4 +587,6 @@ public class ClaudeApiService {
     public void setThinkingEnabled(boolean enabled) { claudeConfig.setThinkingEnabled(enabled); }
     public int getThinkingBudgetTokens() { return claudeConfig.getThinkingBudgetTokens(); }
     public void setThinkingBudgetTokens(int budget) { claudeConfig.setThinkingBudgetTokens(budget); }
+    public int getContextWindowSize() { return claudeConfig.getContextWindowSize(); }
+    public void setContextWindowSize(int size) { claudeConfig.setContextWindowSize(size); }
 }

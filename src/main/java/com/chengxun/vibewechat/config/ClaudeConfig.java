@@ -15,4 +15,5 @@ public class ClaudeConfig {
     private String installPath = "";
     private boolean thinkingEnabled = false;
     private int thinkingBudgetTokens = 10000;
+    private int contextWindowSize = 200000;
 }

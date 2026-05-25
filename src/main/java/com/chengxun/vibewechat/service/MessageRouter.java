@@ -112,6 +112,12 @@ public class MessageRouter {
             ilinkService.sendText(userId, IlInkService.WELCOME_MESSAGE, contextToken);
         }
 
+        // Claude CLI 命令处理（如 /context, /clear 等）
+        if (message.startsWith("/")) {
+            handleClaudeCommand(userId, message, contextToken);
+            return;
+        }
+
         ilinkService.sendTyping(userId);
 
         if (filterConfig.isShowMessageStatus()) {
@@ -198,6 +204,22 @@ public class MessageRouter {
             case V_THINKING -> { if (parts.length > 1) { boolean on = !parts[1].equalsIgnoreCase("off"); claudeApiService.setThinkingEnabled(on); ilinkService.sendText(userId, "推理模式: " + (on ? "开启" : "关闭"), contextToken); } }
             case V_DELETE -> handleDeleteSessionCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
+        }
+    }
+
+    private void handleClaudeCommand(String userId, String command, String contextToken) {
+        ilinkService.sendTyping(userId);
+        try {
+            String response = claudeApiService.sendMessage(userId, command);
+            if (response != null && !response.isEmpty()) {
+                ilinkService.sendText(userId, response, contextToken, "result");
+            } else {
+                ilinkService.sendText(userId, "命令执行完成", contextToken, "result");
+            }
+        } catch (Exception e) {
+            ilinkService.sendText(userId, "命令执行失败: " + e.getMessage(), contextToken, "result");
+        } finally {
+            ilinkService.sendStopTyping(userId);
         }
     }
 
