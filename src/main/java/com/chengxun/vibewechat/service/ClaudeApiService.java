@@ -474,9 +474,9 @@ public class ClaudeApiService {
         // 简单提取核心意图，避免调用 Claude CLI 造成延迟和重复内容
         try {
             String summary = extractCoreIntent(originalMessage);
-            return summary.isEmpty() ? "子任务完成" : summary;
+            return summary.isEmpty() ? "任务处理完成" : summary;
         } catch (Exception e) {
-            return "子任务完成";
+            return "任务处理完成";
         }
     }
 
