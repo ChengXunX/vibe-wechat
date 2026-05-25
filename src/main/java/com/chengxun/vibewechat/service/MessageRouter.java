@@ -60,16 +60,27 @@ public class MessageRouter {
     private static final String V_THINKING = "v-thinking";
     private static final String V_DELETE = "v-delete";
 
-    // 彩蛋关键词映射
+    // 彩蛋关键词映射 - 隐藏彩蛋，不主动提示
     private final Map<String, String> easterEggs = new ConcurrentHashMap<>();
     {
-        easterEggs.put("你好", "👋 你好！我是 **VibeWeChat**\n\n一个基于 Claude AI 的微信智能助手，由 **ChengXun** 开发\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat\n\n---\n\n✨ 试试这些彩蛋关键词：\n• `你好` - 问候\n• `天气` - 查天气\n• `笑话` - 听笑话\n• `摸鱼` - 放松一下");
-        easterEggs.put("hello", "👋 Hello! I'm **VibeWeChat**\n\nA WeChat AI assistant powered by Claude, developed by **ChengXun**\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat\n\n---\n\n✨ Try these easter eggs:\n• `你好` - Greeting\n• `天气` - Weather\n• `笑话` - Jokes\n• `摸鱼` - Take a break");
-        easterEggs.put("hi", "👋 Hi! I'm **VibeWeChat**\n\nA WeChat AI assistant powered by Claude, developed by **ChengXun**\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat\n\n---\n\n✨ Try these easter eggs:\n• `你好` - Greeting\n• `天气` - Weather\n• `笑话` - Jokes\n• `摸鱼` - Take a break");
-        easterEggs.put("天气", "🌤️ 当前天气：晴朗 ☀️\n温度：25°C\n湿度：60%\n\n（这是彩蛋示例，实际天气功能需要接入天气 API）");
-        easterEggs.put("笑话", "😄 为什么程序员总是分不清万圣节和圣诞节？\n\n因为 Oct 31 == Dec 25 🎃🎄");
-        easterEggs.put("摸鱼", "🐟 摸鱼时间到！\n\n放松一下，喝杯咖啡 ☕\n记得定时休息，保护眼睛 👀");
-        easterEggs.put("彩蛋", "🎉 你发现了彩蛋系统！\n\n目前可用的彩蛋关键词：\n• `你好` - 问候\n• `天气` - 查天气\n• `笑话` - 听笑话\n• `摸鱼` - 放松一下\n• `彩蛋` - 彩蛋说明");
+        // 问候彩蛋
+        easterEggs.put("你好", "👋 你好！我是 **VibeWeChat**\n\n一个基于 Claude AI 的微信智能助手，由 **ChengXun** 开发\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat");
+        easterEggs.put("hello", "👋 Hello! I'm **VibeWeChat**\n\nA WeChat AI assistant powered by Claude, developed by **ChengXun**\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat");
+        easterEggs.put("hi", "👋 Hi! I'm **VibeWeChat**\n\nA WeChat AI assistant powered by Claude, developed by **ChengXun**\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat");
+
+        // 隐藏彩蛋 - 谐音梗/网络用语
+        easterEggs.put("666", "🎮 你发现了隐藏彩蛋！\n\n这位朋友一看就是老司机 🚗");
+        easterEggs.put("888", "💰 发发发！祝你财源广进！");
+        easterEggs.put("520", "❤️ 我也爱你～（才怪）");
+        easterEggs.put("1314", "💕 一生一世？醒醒，你只是在和一个 AI 聊天");
+        easterEggs.put("救命", "🆘 收到！正在呼叫救援...\n\n...\n\n...\n\n抱歉，我只是一段代码，救不了你 🤷");
+        easterEggs.put("无聊", " bored? 那我给你讲个程序员笑话：\n\n为什么程序员总是分不清万圣节和圣诞节？\n\n因为 Oct 31 == Dec 25 🎃🎄");
+        easterEggs.put("你是谁", "🤖 我是 VibeWeChat，一个由 Claude AI 驱动的微信助手\n\n但更重要的是——你发现了隐藏彩蛋！\n\n我的创造者是 **ChengXun**，一个神秘的程序员 👨‍💻");
+        easterEggs.put("再见", "👋 再见！记得下次来找我聊天～\n\n（悄悄告诉你：我还藏了更多彩蛋等着你发现）");
+        easterEggs.put("谢谢", "✨ 不客气！能帮到你是我的荣幸～\n\n对了，你今天已经发现了 1 个彩蛋，继续探索吧！");
+        easterEggs.put("github", "🐙 你发现了开发者彩蛋！\n\n🔗 https://github.com/ChengXunX/vibe-wechat\n\n⭐ 给个 Star 支持一下？");
+        easterEggs.put("作者", "👨‍💻 创造我的人叫 **ChengXun**\n\n一个热爱技术、喜欢折腾的程序员\n\n据说他写这个项目是为了摸鱼 🐟");
+        easterEggs.put("vibe", "🎵 Vibe vibes vibes～\n\n感受到了吗？这就是 **VibeWeChat** 的魅力 ✨");
     }
 
     @EventListener
