@@ -431,43 +431,52 @@ public class ClaudeApiService {
     }
 
     public String getTaskSummary(String userId, String originalMessage) {
-        // 使用 Claude 对用户消息进行缩句，只输出摘要，不回答问题
-        String installPath = claudeConfig.getInstallPath();
-        if (installPath == null || installPath.isEmpty()) {
-            return "任务完成";
-        }
-
+        // 简单提取核心意图，避免调用 Claude CLI 造成延迟和重复内容
         try {
-            String prompt = "你是一个摘要助手。请对以下用户指令进行缩句，提取核心任务意图，不超过10个字。只输出缩句结果，不要回答问题，不要解释，不要添加任何其他内容。用户指令：" + originalMessage;
-            List<String> command = new ArrayList<>();
-            command.add(installPath);
-            command.add("--print");
-            command.add("--model");
-            command.add(claudeConfig.getModel());
-            command.add(prompt);
-
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.redirectErrorStream(true);
-            Process process = pb.start();
-
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (!line.startsWith("Warning:") && !line.startsWith("Error:")) {
-                        output.append(line);
-                    }
-                }
-            }
-            process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
-
-            String summary = output.toString().trim();
-            // 去除可能的引号
-            summary = summary.replaceAll("^['\"]|['\"]$", "");
+            String summary = extractCoreIntent(originalMessage);
             return summary.isEmpty() ? "任务完成" : summary;
         } catch (Exception e) {
             return "任务完成";
         }
+    }
+
+    private String extractCoreIntent(String message) {
+        // 移除常见的前缀和后缀
+        String cleaned = message
+                .replaceAll("^(请|帮我|帮忙|麻烦|能不能|可以|是否|是不是|有没有)\\s*", "")
+                .replaceAll("(一下|吗|呢|吧|啊|哦|嗯|好的|谢谢|感谢)\\s*$", "")
+                .trim();
+
+        // 如果消息很短，直接返回
+        if (cleaned.length() <= 15) {
+            return cleaned;
+        }
+
+        // 提取核心动词和宾语
+        String[] actionKeywords = {"修复", "修改", "添加", "删除", "创建", "实现", "优化", "检查", "分析", "搜索", "查找", "配置", "设置", "更新", "升级", "安装", "卸载", "运行", "测试", "部署", "调试", "重命名", "移动", "复制"};
+        String coreAction = "";
+        String coreObject = "";
+
+        for (String keyword : actionKeywords) {
+            if (cleaned.contains(keyword)) {
+                int index = cleaned.indexOf(keyword);
+                coreAction = keyword;
+                // 提取动词后面的内容作为宾语
+                String afterAction = cleaned.substring(index + keyword.length()).trim();
+                if (!afterAction.isEmpty()) {
+                    // 取前10个字符作为宾语摘要
+                    coreObject = afterAction.length() > 10 ? afterAction.substring(0, 10) + "..." : afterAction;
+                }
+                break;
+            }
+        }
+
+        if (!coreAction.isEmpty()) {
+            return coreAction + (coreObject.isEmpty() ? "" : " " + coreObject);
+        }
+
+        // 如果没有找到明确的动作关键词，取前15个字符
+        return cleaned.length() > 15 ? cleaned.substring(0, 15) + "..." : cleaned;
     }
 
     private String formatDuration(long ms) {

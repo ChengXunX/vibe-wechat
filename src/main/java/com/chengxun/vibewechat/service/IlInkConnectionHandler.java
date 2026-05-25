@@ -167,7 +167,7 @@ public class IlInkConnectionHandler {
         // 如果次数 == 9 且不是最终结果，附加警告信息
         String finalText = text;
         if (currentCount == MESSAGE_LIMIT - 1 && !"result".equals(messageType)) {
-            finalText = text + "\n\n━━━━━━━━━━━━━━━━━━━━\n> ⚠️ 微信消息次数即将达到上限（" + currentCount + "/" + MESSAGE_LIMIT + "），后续工具通知将被屏蔽";
+            finalText = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（" + currentCount + "/" + MESSAGE_LIMIT + "）**\n> 后续工具通知将被屏蔽";
         }
 
         try {
