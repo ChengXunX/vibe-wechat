@@ -24,11 +24,11 @@ public class IlInkService {
     public static final String WELCOME_MESSAGE = """
             **🎉 欢迎使用 VibeWechat**
 
-            ━━━━━━━━━━━━━━━━━━━━━━
+            ---
 
             *直接发送消息即可与 Claude 对话*
 
-            ━━━━━━━━━━━━━━━━━━━━━━
+            ---
 
             **快速开始**
             `v-config <key>` 一键配置
@@ -39,7 +39,7 @@ public class IlInkService {
             `v-status` 查看配置
             `v-new` 新建会话
 
-            ━━━━━━━━━━━━━━━━━━━━━━
+            ---
             *Copyright 2026 ChengXun*
             *GitHub: https://github.com/ChengXunX/vibe-wechat*
             """;

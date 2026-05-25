@@ -198,7 +198,7 @@ public class MessageRouter {
             if (!blocked && response != null && !response.isEmpty()) {
                 String taskSummary = claudeApiService.getTaskSummary(userId, message);
                 String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n━━━━━━━━━━━━━━━━━━━━\n" + response + "\n\n" + statsSummary;
+                String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
                 ilinkService.sendText(userId, fullResponse, contextToken, "result");
             } else if (blocked) {
                 ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
