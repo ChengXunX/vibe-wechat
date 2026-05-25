@@ -160,11 +160,11 @@ public class ClaudeApiService {
             command.add("--verbose");
             command.add("--dangerously-skip-permissions");
 
-            // 添加 thinking 模式
+            // 通过 --settings 传递 thinking 配置
             if (thinkingConfig.isEnabled()) {
-                command.add("--thinking");
-                command.add("--thinking-budget");
-                command.add(String.valueOf(thinkingConfig.getCurrentBudgetTokens()));
+                String settingsJson = "{\"thinking\":{\"budget_tokens\":" + thinkingConfig.getCurrentBudgetTokens() + "}}";
+                command.add("--settings");
+                command.add(settingsJson);
             }
 
             // 添加模型配置（支持 [1m] 等配置）
@@ -229,6 +229,13 @@ public class ClaudeApiService {
                                             String toolInput = item.get("input").toString();
                                             if (toolCallback != null) {
                                                 toolCallback.onToolUse(userId, toolName, toolInput);
+                                                // 检测子任务相关工具，发送子任务状态通知
+                                                if (isSubtaskTool(toolName)) {
+                                                    String subtaskStatus = extractSubtaskStatus(toolName, toolInput);
+                                                    if (subtaskStatus != null) {
+                                                        toolCallback.onSubtaskStatus(userId, subtaskStatus);
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -297,13 +304,38 @@ public class ClaudeApiService {
         this.toolCallback = callback;
     }
 
+    private boolean isSubtaskTool(String toolName) {
+        return "TaskCreate".equals(toolName) || "TaskUpdate".equals(toolName)
+                || "TaskGet".equals(toolName) || "TaskList".equals(toolName);
+    }
+
+    private String extractSubtaskStatus(String toolName, String toolInput) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
+            return switch (toolName) {
+                case "TaskCreate" -> "📋 创建子任务: " + (inputNode.has("subject") ? inputNode.get("subject").asText() : "");
+                case "TaskUpdate" -> {
+                    String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
+                    String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
+                    yield "🔄 子任务 " + status + (subject.isEmpty() ? "" : ": " + subject);
+                }
+                case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
+                case "TaskList" -> "📋 列出所有子任务";
+                default -> null;
+            };
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String parseJsonResponse(String userId, String json) {
         try {
             // 使用 Jackson 解析 JSON
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(json);
 
             // 获取 result 字段
-            String result = root.get("result").asText();
+            com.fasterxml.jackson.databind.JsonNode resultNode = root.get("result");
+            String result = resultNode != null ? resultNode.asText() : "";
 
             // 保存 session_id 用于维持上下文
             com.fasterxml.jackson.databind.JsonNode sessionNode = root.get("session_id");

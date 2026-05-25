@@ -108,14 +108,14 @@ public class MessageRouter {
 
                 String contextToken = userContextTokens.get(userId);
                 String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
-                ilinkService.sendText(userId, "🔧 工具调用: " + toolName + "\n" + cleanInput, contextToken, "tool");
+                ilinkService.sendText(userId, "🔧 工具调用: " + toolName + "\n" + cleanInput, contextToken != null ? contextToken : "", "tool");
             }
 
             @Override
             public void onToolResult(String userId, String result) {
                 if (filterConfig.isShowToolCalls()) {
                     String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "📋 工具结果: " + result, contextToken, "sub_result");
+                    ilinkService.sendText(userId, "📋 工具结果: " + result, contextToken != null ? contextToken : "", "sub_result");
                 }
             }
 
@@ -123,7 +123,7 @@ public class MessageRouter {
             public void onSubtaskStatus(String userId, String status) {
                 if (filterConfig.isShowSubtaskStatus()) {
                     String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "🔄 " + status, contextToken, "sub_result");
+                    ilinkService.sendText(userId, "🔄 " + status, contextToken != null ? contextToken : "", "sub_result");
                 }
             }
         });
@@ -217,14 +217,14 @@ public class MessageRouter {
                 if (filterConfig.isShowTaskCompletion()) {
                     String taskSummary = claudeApiService.getTaskSummary(userId, message);
                     String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                    String fullResponse = "✅ 子任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
+                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else {
                     ilinkService.sendText(userId, response, contextToken, "result");
                 }
             } else if (blocked) {
                 if (filterConfig.isShowTaskCompletion()) {
-                    ilinkService.sendText(userId, "✅ 子任务完成（内容被关键词过滤）", contextToken, "result");
+                    ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
                 }
             }
         } finally {
