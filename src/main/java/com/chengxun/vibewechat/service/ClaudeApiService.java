@@ -403,11 +403,22 @@ public class ClaudeApiService {
         String duration = formatDuration(durationMs);
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
-        int contextWindow = claudeConfig.getContextWindowSize();
+        int contextWindow = parseContextWindowSize(claudeConfig.getModel());
         int contextPercent = contextWindow > 0 ? (int) (usage.inputTokens * 100.0 / contextWindow) : 0;
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
         return String.format("---\n📊 Token: %s in / %s out | ⏱️ %s%s%s",
                 formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo);
+    }
+
+    private int parseContextWindowSize(String model) {
+        if (model == null) return claudeConfig.getContextWindowSize();
+        // 从模型名称解析上下文窗口大小，如 "claude-sonnet-4-20250514[1m]"
+        if (model.contains("[1m]") || model.contains("[1M]")) {
+            return 1000000;
+        } else if (model.contains("[200k]") || model.contains("[200K]")) {
+            return 200000;
+        }
+        return claudeConfig.getContextWindowSize();
     }
 
     private String formatTokens(int tokens) {

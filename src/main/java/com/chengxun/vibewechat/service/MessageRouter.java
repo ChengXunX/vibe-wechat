@@ -71,11 +71,16 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                if (filterConfig.isShowToolCalls()) {
-                    String contextToken = userContextTokens.get(userId);
-                    String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
-                    ilinkService.sendText(userId, "🔧 工具调用: " + toolName + "\n" + cleanInput, contextToken, "tool");
-                }
+                if (!filterConfig.isShowToolCalls()) return;
+
+                // 屏蔽文件读取通知
+                if (!filterConfig.isShowFileRead() && isFileReadTool(toolName)) return;
+                // 屏蔽文件编辑通知
+                if (!filterConfig.isShowFileEdit() && isFileEditTool(toolName)) return;
+
+                String contextToken = userContextTokens.get(userId);
+                String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
+                ilinkService.sendText(userId, "🔧 工具调用: " + toolName + "\n" + cleanInput, contextToken, "tool");
             }
 
             @Override
@@ -94,6 +99,17 @@ public class MessageRouter {
                 }
             }
         });
+    }
+
+    private boolean isFileReadTool(String toolName) {
+        return toolName.equalsIgnoreCase("Read") || toolName.equalsIgnoreCase("read_file")
+                || toolName.equalsIgnoreCase("Glob") || toolName.equalsIgnoreCase("Grep");
+    }
+
+    private boolean isFileEditTool(String toolName) {
+        return toolName.equalsIgnoreCase("Write") || toolName.equalsIgnoreCase("Edit")
+                || toolName.equalsIgnoreCase("write_file") || toolName.equalsIgnoreCase("edit_file")
+                || toolName.equalsIgnoreCase("NotebookEdit");
     }
 
     public void handleMessage(String userId, String message, String contextToken) {
