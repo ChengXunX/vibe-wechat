@@ -15,11 +15,8 @@ public class FilterConfig {
     private boolean showFileRead = false;
     private boolean showFileEdit = false;
     private boolean showFileOperations = false;
-    private boolean showDecisionsOnly = true;
-    private boolean showResultsOnly = true;
     private boolean showSubtaskCompletion = true;
     private boolean showTaskCompletion = true;
-    private boolean showTaskDuration = true;
     private boolean showTokenUsage = true;
     private boolean showMessageStatus = false;
     private boolean showSubtaskStatus = true;

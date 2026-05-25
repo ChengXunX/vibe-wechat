@@ -101,6 +101,8 @@ public class MessageRouter {
     }
 
     public void handleMessage(String userId, String message, String contextToken, boolean isNewUser) {
+        ilinkService.resetMessageCount(userId);
+
         if (message.startsWith(V_PREFIX)) {
             handleVibeCommand(userId, message, contextToken);
             return;
@@ -242,36 +244,85 @@ public class MessageRouter {
     }
 
     private void showStatus(String userId, String contextToken) {
+        String sessionId = claudeApiService.getSessionId(userId);
+        int sessionCount = claudeApiService.getSessionHistory(userId).size();
+        ClaudeApiService.TokenUsage usage = claudeApiService.getTokenUsage(userId);
+        String activeProfile = configService.getActiveProfile();
+
         String status = String.format("""
-                **📋 当前配置状态**
+                **📋 系统状态**
 
-                ━━━━━━━━━━━━━━━━━━━━━━
-                **Claude**
-                ━━━━━━━━━━━━━━━━━━━━━━
-                API: `%s`
-                模型: `%s`
-                路径: `%s`
+                | 配置项 | 值 |
+                |---|---|
+                | API | `%s` |
+                | 模型 | `%s` |
+                | 路径 | `%s` |
+                | 推理模式 | %s |
+                | 活跃配置 | `%s` |
 
-                ━━━━━━━━━━━━━━━━━━━━━━
-                **工作目录**
-                ━━━━━━━━━━━━━━━━━━━━━━
-                `%s`
+                **当前会话**
 
-                ━━━━━━━━━━━━━━━━━━━━━━
-                **通知**
-                ━━━━━━━━━━━━━━━━━━━━━━
-                工具调用: %s
-                文件读取: %s
-                文件编辑: %s
+                | 项目 | 值 |
+                |---|---|
+                | 会话ID | `%s` |
+                | 历史会话 | %d 个 |
+                | 工作目录 | `%s` |
+
+                **Token 用量**
+
+                | 输入 | 输出 | 总计 |
+                |---|---|---|
+                | %s | %s | %s |
+
+                **通知配置**
+
+                | 通知项 | 状态 |
+                |---|---|
+                | 消息状态 | %s |
+                | 工具调用 | %s |
+                | 文件读取 | %s |
+                | 文件编辑 | %s |
+                | 子任务状态 | %s |
+                | 任务完成 | %s |
+                | Token统计 | %s |
+                | 子任务完成 | %s |
+
+                **其他**
+
+                | 项目 | 值 |
+                |---|---|
+                | 关键词过滤 | %d 个 |
                 """,
-                claudeApiService.getApiUrl(),
-                claudeApiService.getModel(),
+                claudeApiService.getApiUrl() != null ? claudeApiService.getApiUrl() : "未设置",
+                claudeApiService.getModel() != null ? claudeApiService.getModel() : "未设置",
                 claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
+                claudeApiService.isThinkingEnabled() ? "✅ 开启" : "❌ 关闭",
+                activeProfile != null && !activeProfile.isEmpty() ? activeProfile : "无",
+                sessionId != null ? sessionId : "无",
+                sessionCount,
                 System.getProperty("user.dir"),
+                formatTokens(usage.getInputTokens()),
+                formatTokens(usage.getOutputTokens()),
+                formatTokens(usage.getTotalTokens()),
+                filterConfig.isShowMessageStatus() ? "✅" : "❌",
                 filterConfig.isShowToolCalls() ? "✅" : "❌",
                 filterConfig.isShowFileRead() ? "✅" : "❌",
-                filterConfig.isShowFileEdit() ? "✅" : "❌");
+                filterConfig.isShowFileEdit() ? "✅" : "❌",
+                filterConfig.isShowSubtaskStatus() ? "✅" : "❌",
+                filterConfig.isShowTaskCompletion() ? "✅" : "❌",
+                filterConfig.isShowTokenUsage() ? "✅" : "❌",
+                filterConfig.isShowSubtaskCompletion() ? "✅" : "❌",
+                filterConfig.getBlockedKeywords().size());
         ilinkService.sendText(userId, status, contextToken);
+    }
+
+    private String formatTokens(int tokens) {
+        if (tokens >= 1000000) {
+            return String.format("%.1fm", tokens / 1000000.0);
+        } else if (tokens >= 1000) {
+            return String.format("%.1fk", tokens / 1000.0);
+        }
+        return String.valueOf(tokens);
     }
 
     private void handleFilterCommand(String userId, String[] parts, String contextToken) {
