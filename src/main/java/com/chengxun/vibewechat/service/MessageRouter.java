@@ -151,7 +151,11 @@ public class MessageRouter {
         }
 
         if (isNewUser) {
-            ilinkService.sendText(userId, IlInkService.WELCOME_MESSAGE, contextToken);
+            String welcome = IlInkService.WELCOME_MESSAGE;
+            if (configService.detectConflict()) {
+                welcome += "\n\n⚠️ 检测到 Claude settings 文件已被外部修改，已保存为「冲突配置」预设。\n如需恢复，请使用 `v-switch 冲突配置`";
+            }
+            ilinkService.sendText(userId, welcome, contextToken);
         }
 
         // Claude CLI 命令处理（如 /context, /clear 等）
@@ -210,12 +214,18 @@ public class MessageRouter {
             }
 
             if (!blocked && response != null && !response.isEmpty()) {
-                String taskSummary = claudeApiService.getTaskSummary(userId, message);
-                String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
-                String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
-                ilinkService.sendText(userId, fullResponse, contextToken, "result");
+                if (filterConfig.isShowTaskCompletion()) {
+                    String taskSummary = claudeApiService.getTaskSummary(userId, message);
+                    String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
+                    String fullResponse = "✅ 子任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
+                    ilinkService.sendText(userId, fullResponse, contextToken, "result");
+                } else {
+                    ilinkService.sendText(userId, response, contextToken, "result");
+                }
             } else if (blocked) {
-                ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
+                if (filterConfig.isShowTaskCompletion()) {
+                    ilinkService.sendText(userId, "✅ 子任务完成（内容被关键词过滤）", contextToken, "result");
+                }
             }
         } finally {
             typingThread.interrupt();
@@ -235,14 +245,14 @@ public class MessageRouter {
             case V_CLEAR -> claudeApiService.clearHistory(userId);
             case V_SESSIONS -> handleListSessions(userId, contextToken);
             case V_LIMIT -> handleLimitCommand(userId, parts, contextToken);
-            case V_API -> { if (parts.length > 1) { claudeApiService.setApiUrl(parts[1]); ilinkService.sendText(userId, "已设置 API: " + parts[1], contextToken); } }
-            case V_KEY -> { if (parts.length > 1) { claudeApiService.setApiKey(parts[1]); ilinkService.sendText(userId, "已设置 API Key", contextToken); } }
-            case V_MODEL -> { if (parts.length > 1) { claudeApiService.setModel(parts[1]); ilinkService.sendText(userId, "已设置模型: " + parts[1], contextToken); } }
+            case V_API -> { if (parts.length > 1) { claudeApiService.setApiUrl(parts[1]); configService.saveConfig(); ilinkService.sendText(userId, "已设置 API: " + parts[1] + "\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } }
+            case V_KEY -> { if (parts.length > 1) { claudeApiService.setApiKey(parts[1]); configService.saveConfig(); ilinkService.sendText(userId, "已设置 API Key\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } }
+            case V_MODEL -> { if (parts.length > 1) { claudeApiService.setModel(parts[1]); configService.saveConfig(); ilinkService.sendText(userId, "已设置模型: " + parts[1] + "\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } }
             case V_TOOLS -> handleQuickToggle(userId, "tools", parts, contextToken);
             case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts, contextToken);
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
             case V_TOKEN -> { String usage = claudeApiService.getTokenUsageSummary(userId); ilinkService.sendText(userId, "Token: " + usage, contextToken); }
-            case V_CLAUDE -> { if (parts.length > 1) { claudeApiService.setInstallPath(parts[1]); ilinkService.sendText(userId, "已设置路径: " + parts[1], contextToken); } }
+            case V_CLAUDE -> { if (parts.length > 1) { claudeApiService.setInstallPath(parts[1]); configService.saveConfig(); ilinkService.sendText(userId, "已设置路径: " + parts[1] + "\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } }
             case V_CD -> {
                 if (parts.length > 1) {
                     java.io.File dir = new java.io.File(parts[1]).getAbsoluteFile();
@@ -250,14 +260,16 @@ public class MessageRouter {
                         ilinkService.sendText(userId, "目录不存在: " + parts[1] + "\n请先使用 AI 工具创建该目录", contextToken);
                     } else {
                         System.setProperty("user.dir", dir.getAbsolutePath());
+                        claudeApiService.setWorkDir(dir.getAbsolutePath());
+                        configService.saveConfig();
                         claudeApiService.clearHistory(userId);
                         ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n会话已重置", contextToken);
                     }
                 }
             }
-            case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }
-            case V_UNBLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().remove(kw); ilinkService.sendText(userId, "已移除: " + kw, contextToken); } }
-            case V_NOTIFY -> { if (parts.length > 1) { filterConfig.setShowMessageStatus(Boolean.parseBoolean(parts[1])); ilinkService.sendText(userId, "通知: " + (filterConfig.isShowMessageStatus() ? "开启" : "关闭"), contextToken); } }
+            case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); configService.saveConfig(); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }
+            case V_UNBLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().remove(kw); configService.saveConfig(); ilinkService.sendText(userId, "已移除: " + kw, contextToken); } }
+            case V_NOTIFY -> { if (parts.length > 1) { filterConfig.setShowMessageStatus(Boolean.parseBoolean(parts[1])); configService.saveConfig(); ilinkService.sendText(userId, "通知: " + (filterConfig.isShowMessageStatus() ? "开启" : "关闭"), contextToken); } }
             case V_SWITCH -> handleSwitchCommand(userId, parts, contextToken);
             case V_SAVE -> handleSaveCommand(userId, parts, contextToken);
             case V_PROFILES -> handleProfilesCommand(userId, parts, contextToken);
@@ -465,7 +477,7 @@ public class MessageRouter {
 
     private void handleSwitchCommand(String userId, String[] parts, String contextToken) {
         if (parts.length >= 2 && configService.switchProfile(parts[1])) {
-            ilinkService.sendText(userId, "已切换: " + parts[1], contextToken);
+            ilinkService.sendText(userId, "已切换: " + parts[1] + "\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
         } else {
             ilinkService.sendText(userId, "用法: v-switch <name>\n使用 v-profiles 查看", contextToken);
         }
@@ -474,7 +486,7 @@ public class MessageRouter {
     private void handleSaveCommand(String userId, String[] parts, String contextToken) {
         if (parts.length >= 2) {
             configService.saveProfile(parts[1]);
-            ilinkService.sendText(userId, "已保存: " + parts[1], contextToken);
+            ilinkService.sendText(userId, "已保存: " + parts[1] + "\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
         } else {
             ilinkService.sendText(userId, "用法: v-save <name>", contextToken);
         }
@@ -498,19 +510,18 @@ public class MessageRouter {
             if (level.equals("off")) {
                 thinkingConfig.setLevel("off");
                 configService.saveConfig();
-                ilinkService.sendText(userId, "推理模式: 关闭", contextToken);
+                ilinkService.sendText(userId, "推理模式: 关闭\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
             } else if (thinkingConfig.getLevels().contains(level)) {
                 thinkingConfig.setLevel(level);
                 configService.saveConfig();
-                ilinkService.sendText(userId, "推理模式: " + level + " (budget: " + thinkingConfig.getCurrentBudgetTokens() + " tokens)", contextToken);
+                ilinkService.sendText(userId, "推理模式: " + level + " (budget: " + thinkingConfig.getCurrentBudgetTokens() + " tokens)\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
             } else {
                 ilinkService.sendText(userId, "无效级别，可选: " + String.join(", ", thinkingConfig.getLevels()) + ", off", contextToken);
             }
         } else {
-            // 循环切换级别
             String newLevel = thinkingConfig.cycleLevel();
             configService.saveConfig();
-            ilinkService.sendText(userId, "推理模式: " + newLevel + " (budget: " + thinkingConfig.getCurrentBudgetTokens() + " tokens)", contextToken);
+            ilinkService.sendText(userId, "推理模式: " + newLevel + " (budget: " + thinkingConfig.getCurrentBudgetTokens() + " tokens)\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
         }
     }
 }

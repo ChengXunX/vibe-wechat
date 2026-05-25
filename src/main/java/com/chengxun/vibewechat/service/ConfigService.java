@@ -13,6 +13,8 @@ import org.springframework.stereotype.Service;
 import jakarta.annotation.PostConstruct;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,12 +37,16 @@ public class ConfigService {
             .enable(SerializationFeature.INDENT_OUTPUT);
 
     private static final String CONFIG_FILE = "vibe-wechat-config.json";
+    private static final String CLAUDE_SETTINGS_FILE = System.getProperty("user.home") + "/.claude/settings.json";
 
     private final SwitchConfig switchConfig = new SwitchConfig();
+    private String lastKnownSettingsHash = "";
+    private boolean conflictDetected = false;
 
     @PostConstruct
     public void init() {
         loadConfig();
+        lastKnownSettingsHash = computeSettingsHash();
     }
 
     public void saveConfig() {
@@ -52,6 +58,7 @@ public class ConfigService {
             claude.put("apiKey", claudeConfig.getApiKey());
             claude.put("model", claudeConfig.getModel());
             claude.put("installPath", claudeConfig.getInstallPath());
+            claude.put("workDir", claudeConfig.getWorkDir());
             config.put("claude", claude);
 
             Map<String, Object> thinking = new HashMap<>();
@@ -89,10 +96,155 @@ public class ConfigService {
             config.put("switch", switchCfg);
 
             objectMapper.writeValue(new File(CONFIG_FILE), config);
+            saveClaudeSettings();
             log.info("Config saved to {}", CONFIG_FILE);
         } catch (IOException e) {
             log.error("Failed to save config", e);
         }
+    }
+
+    public void saveClaudeSettings() {
+        try {
+            Path settingsPath = Path.of(CLAUDE_SETTINGS_FILE);
+            Map<String, Object> settings;
+            if (Files.exists(settingsPath)) {
+                String content = new String(Files.readAllBytes(settingsPath));
+                settings = objectMapper.readValue(content, Map.class);
+            } else {
+                settings = new HashMap<>();
+                Files.createDirectories(settingsPath.getParent());
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> env = (Map<String, Object>) settings.get("env");
+            if (env == null) {
+                env = new HashMap<>();
+                settings.put("env", env);
+            }
+
+            env.put("ANTHROPIC_BASE_URL", claudeConfig.getApiUrl());
+            env.put("ANTHROPIC_AUTH_TOKEN", claudeConfig.getApiKey());
+            env.put("ANTHROPIC_MODEL", claudeConfig.getModel());
+
+            objectMapper.writeValue(settingsPath.toFile(), settings);
+            lastKnownSettingsHash = computeSettingsHash();
+            log.info("Claude settings synced to {}", CLAUDE_SETTINGS_FILE);
+        } catch (IOException e) {
+            log.error("Failed to save Claude settings", e);
+        }
+    }
+
+    private String computeSettingsHash() {
+        try {
+            Path settingsPath = Path.of(CLAUDE_SETTINGS_FILE);
+            if (Files.exists(settingsPath)) {
+                String content = new String(Files.readAllBytes(settingsPath));
+                return String.valueOf(content.hashCode());
+            }
+        } catch (IOException e) {
+            log.debug("Failed to compute settings hash", e);
+        }
+        return "";
+    }
+
+    public boolean detectConflict() {
+        conflictDetected = false;
+        String currentHash = computeSettingsHash();
+        if (!lastKnownSettingsHash.isEmpty() && !currentHash.equals(lastKnownSettingsHash)) {
+            log.warn("Claude settings file changed externally, saving as conflict preset");
+            saveConflictPreset();
+            lastKnownSettingsHash = currentHash;
+            conflictDetected = true;
+        }
+        if (lastKnownSettingsHash.isEmpty() && !currentHash.isEmpty()) {
+            lastKnownSettingsHash = currentHash;
+        }
+        return conflictDetected;
+    }
+
+    private void saveConflictPreset() {
+        try {
+            Path settingsPath = Path.of(CLAUDE_SETTINGS_FILE);
+            if (!Files.exists(settingsPath)) return;
+
+            String content = new String(Files.readAllBytes(settingsPath));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> settings = objectMapper.readValue(content, Map.class);
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> env = (Map<String, Object>) settings.get("env");
+            if (env == null) return;
+
+            String extUrl = (String) env.getOrDefault("ANTROPIC_BASE_URL", "");
+            String extKey = (String) env.getOrDefault("ANTROPIC_AUTH_TOKEN", "");
+            String extModel = (String) env.getOrDefault("ANTHROPIC_MODEL", "");
+
+            SwitchConfig.SwitchProfile conflictProfile = new SwitchConfig.SwitchProfile(
+                    "冲突配置", extUrl, extKey, extModel
+            );
+            switchConfig.getProfiles().removeIf(p -> p.getName().equals("冲突配置"));
+            switchConfig.getProfiles().add(conflictProfile);
+            saveConfigWithoutSync();
+
+            log.info("Conflict preset saved: url={}, model={}", extUrl, extModel);
+        } catch (IOException e) {
+            log.error("Failed to save conflict preset", e);
+        }
+    }
+
+    private void saveConfigWithoutSync() {
+        try {
+            Map<String, Object> config = new HashMap<>();
+
+            Map<String, Object> claude = new HashMap<>();
+            claude.put("apiUrl", claudeConfig.getApiUrl());
+            claude.put("apiKey", claudeConfig.getApiKey());
+            claude.put("model", claudeConfig.getModel());
+            claude.put("installPath", claudeConfig.getInstallPath());
+            claude.put("workDir", claudeConfig.getWorkDir());
+            config.put("claude", claude);
+
+            Map<String, Object> thinking = new HashMap<>();
+            thinking.put("level", thinkingConfig.getLevel());
+            thinking.put("levels", thinkingConfig.getLevels());
+            config.put("thinking", thinking);
+
+            Map<String, Object> filter = new HashMap<>();
+            filter.put("showToolCalls", filterConfig.isShowToolCalls());
+            filter.put("showFileRead", filterConfig.isShowFileRead());
+            filter.put("showFileEdit", filterConfig.isShowFileEdit());
+            filter.put("showFileOperations", filterConfig.isShowFileOperations());
+            filter.put("showSubtaskCompletion", filterConfig.isShowSubtaskCompletion());
+            filter.put("showTaskCompletion", filterConfig.isShowTaskCompletion());
+            filter.put("showTokenUsage", filterConfig.isShowTokenUsage());
+            filter.put("showMessageStatus", filterConfig.isShowMessageStatus());
+            filter.put("showSubtaskStatus", filterConfig.isShowSubtaskStatus());
+            filter.put("maxMessagesPerUser", filterConfig.getMaxMessagesPerUser());
+            filter.put("blockedKeywords", filterConfig.getBlockedKeywords());
+            config.put("filter", filter);
+
+            Map<String, Object> switchCfg = new HashMap<>();
+            switchCfg.put("activeProfile", switchConfig.getActiveProfile());
+            List<Map<String, Object>> profiles = new ArrayList<>();
+            for (SwitchConfig.SwitchProfile profile : switchConfig.getProfiles()) {
+                Map<String, Object> p = new HashMap<>();
+                p.put("name", profile.getName());
+                p.put("apiUrl", profile.getApiUrl());
+                p.put("apiKey", profile.getApiKey());
+                p.put("model", profile.getModel());
+                profiles.add(p);
+            }
+            switchCfg.put("profiles", profiles);
+            config.put("switch", switchCfg);
+
+            objectMapper.writeValue(new File(CONFIG_FILE), config);
+        } catch (IOException e) {
+            log.error("Failed to save config without sync", e);
+        }
+    }
+
+    public boolean isConflictDetected() {
+        return conflictDetected;
     }
 
     public void loadConfig() {
@@ -120,6 +272,13 @@ public class ConfigService {
                 }
                 if (claude.containsKey("installPath") && claude.get("installPath") != null) {
                     claudeConfig.setInstallPath((String) claude.get("installPath"));
+                }
+                if (claude.containsKey("workDir") && claude.get("workDir") != null) {
+                    claudeConfig.setWorkDir((String) claude.get("workDir"));
+                    String wd = (String) claude.get("workDir");
+                    if (!wd.isEmpty()) {
+                        System.setProperty("user.dir", wd);
+                    }
                 }
             }
 

@@ -160,6 +160,13 @@ public class ClaudeApiService {
             command.add("--verbose");
             command.add("--dangerously-skip-permissions");
 
+            // 添加 thinking 模式
+            if (thinkingConfig.isEnabled()) {
+                command.add("--thinking");
+                command.add("--thinking-budget");
+                command.add(String.valueOf(thinkingConfig.getCurrentBudgetTokens()));
+            }
+
             // 添加模型配置（支持 [1m] 等配置）
             String model = claudeConfig.getModel();
             if (model != null && !model.isEmpty()) {
@@ -435,9 +442,9 @@ public class ClaudeApiService {
         // 简单提取核心意图，避免调用 Claude CLI 造成延迟和重复内容
         try {
             String summary = extractCoreIntent(originalMessage);
-            return summary.isEmpty() ? "任务完成" : summary;
+            return summary.isEmpty() ? "子任务完成" : summary;
         } catch (Exception e) {
-            return "任务完成";
+            return "子任务完成";
         }
     }
 
@@ -595,6 +602,8 @@ public class ClaudeApiService {
     public void setModel(String model) { claudeConfig.setModel(model); }
     public String getInstallPath() { return claudeConfig.getInstallPath(); }
     public void setInstallPath(String path) { claudeConfig.setInstallPath(path); }
+    public String getWorkDir() { return claudeConfig.getWorkDir(); }
+    public void setWorkDir(String dir) { claudeConfig.setWorkDir(dir); }
     public int getContextWindowSize() { return claudeConfig.getContextWindowSize(); }
     public void setContextWindowSize(int size) { claudeConfig.setContextWindowSize(size); }
 

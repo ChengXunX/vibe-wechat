@@ -14,4 +14,5 @@ public class ClaudeConfig {
     private int maxTokens = 4096;
     private String installPath = "";
     private int contextWindowSize = 200000;
+    private String workDir = "";
 }
