@@ -63,6 +63,9 @@ public class MessageRouter {
     private static final String V_PROFILES = "v-profiles";
     private static final String V_THINKING = "v-thinking";
     private static final String V_DELETE = "v-delete";
+    private static final String V_SUBTASK = "v-subtask";
+    private static final String V_SUBTASK_DONE = "v-subtask-done";
+    private static final String V_TOKEN = "v-token";
 
     // 彩蛋关键词映射 - 隐藏彩蛋，不主动提示
     private final Map<String, String> easterEggs = new ConcurrentHashMap<>();
@@ -253,7 +256,16 @@ public class MessageRouter {
             case V_TOOLS -> handleQuickToggle(userId, "tools", parts, contextToken);
             case V_FILEREAD -> handleQuickToggle(userId, "fileread", parts, contextToken);
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
-            case V_TOKEN -> { String usage = claudeApiService.getTokenUsageSummary(userId); ilinkService.sendText(userId, "Token: " + usage, contextToken); }
+            case V_SUBTASK -> handleQuickToggle(userId, "subtask", parts, contextToken);
+            case V_SUBTASK_DONE -> handleQuickToggle(userId, "subtask-done", parts, contextToken);
+            case V_TOKEN -> {
+                if (parts.length > 1) {
+                    handleQuickToggle(userId, "token", parts, contextToken);
+                } else {
+                    String usage = claudeApiService.getTokenUsageSummary(userId);
+                    ilinkService.sendText(userId, "Token: " + usage, contextToken);
+                }
+            }
             case V_CLAUDE -> { if (parts.length > 1) { claudeApiService.setInstallPath(parts[1]); configService.saveConfig(); ilinkService.sendText(userId, "已设置路径: " + parts[1] + "\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } }
             case V_CD -> {
                 if (parts.length > 1) {
@@ -334,7 +346,9 @@ public class MessageRouter {
                 | `v-tools` | 工具调用通知 |
                 | `v-fileread` | 文件读取通知 |
                 | `v-fileedit` | 文件编辑通知 |
-                | `v-filter tools/fileread/fileedit/notify <true/false>` | 精细控制 |
+                | `v-subtask <true/false>` | 子任务状态通知 |
+                | `v-subtask-done <true/false>` | 子任务完成通知 |
+                | `v-token` / `v-token <true/false>` | 查看/开关Token统计 |
 
                 **关键词过滤**
 
@@ -449,6 +463,9 @@ public class MessageRouter {
             case "fileread" -> filterConfig.setShowFileRead(Boolean.parseBoolean(value));
             case "fileedit" -> filterConfig.setShowFileEdit(Boolean.parseBoolean(value));
             case "notify" -> filterConfig.setShowMessageStatus(Boolean.parseBoolean(value));
+            case "subtask" -> filterConfig.setShowSubtaskStatus(Boolean.parseBoolean(value));
+            case "subtask-done" -> filterConfig.setShowSubtaskCompletion(Boolean.parseBoolean(value));
+            case "token" -> filterConfig.setShowTokenUsage(Boolean.parseBoolean(value));
         }
         configService.saveConfig();
         ilinkService.sendText(userId, "已更新: " + key + " = " + value, contextToken);
@@ -460,6 +477,9 @@ public class MessageRouter {
             case "tools" -> filterConfig.setShowToolCalls(newValue);
             case "fileread" -> filterConfig.setShowFileRead(newValue);
             case "fileedit" -> filterConfig.setShowFileEdit(newValue);
+            case "subtask" -> filterConfig.setShowSubtaskStatus(newValue);
+            case "subtask-done" -> filterConfig.setShowSubtaskCompletion(newValue);
+            case "token" -> filterConfig.setShowTokenUsage(newValue);
         }
         configService.saveConfig();
         ilinkService.sendText(userId, type + " = " + (newValue ? "on" : "off"), contextToken);

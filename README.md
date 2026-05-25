@@ -75,7 +75,9 @@ cd /home/chengxun/vibe-wechat
 | `v-tools` | 工具调用通知 |
 | `v-fileread` | 文件读取通知 |
 | `v-fileedit` | 文件编辑通知 |
-| `v-filter tools/fileread/fileedit/notify <true/false>` | 精细控制 |
+| `v-subtask <true/false>` | 子任务状态通知 |
+| `v-subtask-done <true/false>` | 子任务完成通知 |
+| `v-token` / `v-token <true/false>` | 查看/开关Token统计 |
 
 ### 关键词过滤
 
