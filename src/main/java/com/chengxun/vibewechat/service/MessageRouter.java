@@ -63,9 +63,9 @@ public class MessageRouter {
     // 彩蛋关键词映射
     private final Map<String, String> easterEggs = new ConcurrentHashMap<>();
     {
-        easterEggs.put("你好", "👋 你好！我是你的 VibeWeChat 助手！\n\n✨ 试试这些彩蛋关键词：\n• `你好` - 问候\n• `天气` - 查天气\n• `笑话` - 听笑话\n• `摸鱼` - 放松一下");
-        easterEggs.put("hello", "👋 Hello! Welcome to VibeWeChat!\n\n✨ Try these easter eggs:\n• `你好` - Greeting\n• `天气` - Weather\n• `笑话` - Jokes\n• `摸鱼` - Take a break");
-        easterEggs.put("hi", "👋 Hi there! Nice to meet you!\n\n✨ Try these easter eggs:\n• `你好` - Greeting\n• `天气` - Weather\n• `笑话` - Jokes\n• `摸鱼` - Take a break");
+        easterEggs.put("你好", "👋 你好！我是 **VibeWeChat**\n\n一个基于 Claude AI 的微信智能助手，由 **ChengXun** 开发\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat\n\n---\n\n✨ 试试这些彩蛋关键词：\n• `你好` - 问候\n• `天气` - 查天气\n• `笑话` - 听笑话\n• `摸鱼` - 放松一下");
+        easterEggs.put("hello", "👋 Hello! I'm **VibeWeChat**\n\nA WeChat AI assistant powered by Claude, developed by **ChengXun**\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat\n\n---\n\n✨ Try these easter eggs:\n• `你好` - Greeting\n• `天气` - Weather\n• `笑话` - Jokes\n• `摸鱼` - Take a break");
+        easterEggs.put("hi", "👋 Hi! I'm **VibeWeChat**\n\nA WeChat AI assistant powered by Claude, developed by **ChengXun**\n\n🔗 GitHub: https://github.com/ChengXunX/vibe-wechat\n\n---\n\n✨ Try these easter eggs:\n• `你好` - Greeting\n• `天气` - Weather\n• `笑话` - Jokes\n• `摸鱼` - Take a break");
         easterEggs.put("天气", "🌤️ 当前天气：晴朗 ☀️\n温度：25°C\n湿度：60%\n\n（这是彩蛋示例，实际天气功能需要接入天气 API）");
         easterEggs.put("笑话", "😄 为什么程序员总是分不清万圣节和圣诞节？\n\n因为 Oct 31 == Dec 25 🎃🎄");
         easterEggs.put("摸鱼", "🐟 摸鱼时间到！\n\n放松一下，喝杯咖啡 ☕\n记得定时休息，保护眼睛 👀");

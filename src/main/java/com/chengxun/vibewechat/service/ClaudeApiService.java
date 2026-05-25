@@ -452,31 +452,22 @@ public class ClaudeApiService {
             return cleaned;
         }
 
-        // 提取核心动词和宾语
-        String[] actionKeywords = {"修复", "修改", "添加", "删除", "创建", "实现", "优化", "检查", "分析", "搜索", "查找", "配置", "设置", "更新", "升级", "安装", "卸载", "运行", "测试", "部署", "调试", "重命名", "移动", "复制"};
-        String coreAction = "";
-        String coreObject = "";
-
-        for (String keyword : actionKeywords) {
-            if (cleaned.contains(keyword)) {
-                int index = cleaned.indexOf(keyword);
-                coreAction = keyword;
-                // 提取动词后面的内容作为宾语
-                String afterAction = cleaned.substring(index + keyword.length()).trim();
-                if (!afterAction.isEmpty()) {
-                    // 取前10个字符作为宾语摘要
-                    coreObject = afterAction.length() > 10 ? afterAction.substring(0, 10) + "..." : afterAction;
-                }
-                break;
+        // 取第一个句子（到句号、问号、感叹号为止）
+        String[] sentenceEnders = {"。", "！", "？", ".", "!", "?"};
+        int minEnd = cleaned.length();
+        for (String ender : sentenceEnders) {
+            int pos = cleaned.indexOf(ender);
+            if (pos > 0 && pos < minEnd) {
+                minEnd = pos;
             }
         }
 
-        if (!coreAction.isEmpty()) {
-            return coreAction + (coreObject.isEmpty() ? "" : " " + coreObject);
+        if (minEnd < cleaned.length()) {
+            return cleaned.substring(0, minEnd + 1).trim();
         }
 
-        // 如果没有找到明确的动作关键词，取前15个字符
-        return cleaned.length() > 15 ? cleaned.substring(0, 15) + "..." : cleaned;
+        // 如果没有句子结束符，取前20个字符
+        return cleaned.length() > 20 ? cleaned.substring(0, 20) + "..." : cleaned;
     }
 
     private String formatDuration(long ms) {
