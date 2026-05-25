@@ -90,6 +90,7 @@ public class MessageRouter {
     @EventListener
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
         userContextTokens.put(event.getUserId(), event.getContextToken());
+        ilinkService.resetMessageCount(event.getUserId());
         handleMessage(event.getUserId(), event.getContent(), event.getContextToken(), event.isNewUser());
     }
 
@@ -144,8 +145,6 @@ public class MessageRouter {
     }
 
     public void handleMessage(String userId, String message, String contextToken, boolean isNewUser) {
-        ilinkService.resetMessageCount(userId);
-
         if (message.startsWith(V_PREFIX)) {
             handleVibeCommand(userId, message, contextToken);
             return;
@@ -246,9 +245,14 @@ public class MessageRouter {
             case V_CLAUDE -> { if (parts.length > 1) { claudeApiService.setInstallPath(parts[1]); ilinkService.sendText(userId, "已设置路径: " + parts[1], contextToken); } }
             case V_CD -> {
                 if (parts.length > 1) {
-                    System.setProperty("user.dir", parts[1]);
-                    claudeApiService.clearHistory(userId);
-                    ilinkService.sendText(userId, "工作目录: " + parts[1] + "\n会话已重置", contextToken);
+                    java.io.File dir = new java.io.File(parts[1]).getAbsoluteFile();
+                    if (!dir.exists() || !dir.isDirectory()) {
+                        ilinkService.sendText(userId, "目录不存在: " + parts[1] + "\n请先使用 AI 工具创建该目录", contextToken);
+                    } else {
+                        System.setProperty("user.dir", dir.getAbsolutePath());
+                        claudeApiService.clearHistory(userId);
+                        ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n会话已重置", contextToken);
+                    }
                 }
             }
             case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }

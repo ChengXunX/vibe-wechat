@@ -228,10 +228,7 @@ public class ClaudeApiService {
                                 }
                             }
                         } else if ("result".equals(type)) {
-                            // 最终结果
-                            String result = node.get("result").asText();
-                            output.append(result);
-
+                            // 最终结果 - 只提取 metadata，文本内容已从 assistant 消息获取
                             // 保存 session_id
                             com.fasterxml.jackson.databind.JsonNode sessionNode = node.get("session_id");
                             if (sessionNode != null) {
