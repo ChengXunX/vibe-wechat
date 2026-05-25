@@ -39,8 +39,6 @@ public class ClaudeService {
         return switch (type) {
             case TOOL_CALL -> filterConfig.isShowToolCalls();
             case FILE_OPERATION -> filterConfig.isShowFileOperations();
-            case DECISION -> filterConfig.isShowDecisionsOnly();
-            case RESULT -> filterConfig.isShowResultsOnly();
             case SUBTASK_COMPLETION -> filterConfig.isShowSubtaskCompletion();
             case TASK_COMPLETION -> filterConfig.isShowTaskCompletion();
             default -> true;
