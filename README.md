@@ -20,7 +20,7 @@
 ## 快速开始
 
 ### 环境要求
-- Java 25+、Maven 3+、Redis
+- Java 25+、Maven 3+
 
 ### 启动服务
 ```bash
@@ -36,7 +36,7 @@ cd /home/chengxun/vibe-wechat
 启动后访问: http://localhost:9921/qrcode
 
 ### 首次配置
-扫码连接后，发送：`v-config your-api-key claude-sonnet-4-20250514`
+扫码连接后，发送：`v-config your-api-key https://api.anthropic.com claude-sonnet-4-20250514`
 
 ## 微信命令
 
@@ -44,7 +44,7 @@ cd /home/chengxun/vibe-wechat
 |------|------|
 | `v-help` | 显示所有命令 |
 | `v-status` | 显示当前配置 |
-| `v-config <key> [url] [model]` | 一键配置 |
+| `v-config <key> <url> <model>` | 一键配置 |
 | `v-model <name>` | 设置模型 |
 | `v-claude <path>` | 设置安装路径 |
 | `v-thinking <级别>` | 推理模式 |

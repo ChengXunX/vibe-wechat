@@ -243,16 +243,34 @@ public class MessageRouter {
 
     private void showStatus(String userId, String contextToken) {
         String status = String.format("""
-                **当前配置状态**
-                API: %s
-                模型: %s
-                路径: %s
-                工作目录: %s
+                **📋 当前配置状态**
+
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **Claude**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                API: `%s`
+                模型: `%s`
+                路径: `%s`
+
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **工作目录**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                `%s`
+
+                ━━━━━━━━━━━━━━━━━━━━━━
+                **通知**
+                ━━━━━━━━━━━━━━━━━━━━━━
+                工具调用: %s
+                文件读取: %s
+                文件编辑: %s
                 """,
                 claudeApiService.getApiUrl(),
                 claudeApiService.getModel(),
                 claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
-                System.getProperty("user.dir"));
+                System.getProperty("user.dir"),
+                filterConfig.isShowToolCalls() ? "✅" : "❌",
+                filterConfig.isShowFileRead() ? "✅" : "❌",
+                filterConfig.isShowFileEdit() ? "✅" : "❌");
         ilinkService.sendText(userId, status, contextToken);
     }
 
