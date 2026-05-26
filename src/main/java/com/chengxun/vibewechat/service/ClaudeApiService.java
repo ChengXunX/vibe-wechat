@@ -42,6 +42,9 @@ public class ClaudeApiService {
     private final Map<String, String> subtaskNames = new ConcurrentHashMap<>();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
+    // 磁盘会话缓存
+    private List<DiskSession> diskSessions = new ArrayList<>();
+
     // 常驻进程池
     private final Map<String, List<ClaudeProcess>> processPools = new ConcurrentHashMap<>();
     private final Map<String, BlockingQueue<PendingRequest>> requestQueues = new ConcurrentHashMap<>();
@@ -54,6 +57,12 @@ public class ClaudeApiService {
         if (claudeConfig.getInstallPath() == null || claudeConfig.getInstallPath().isEmpty()) {
             detectClaudePath();
         }
+
+        // 清理孤儿进程
+        cleanupOrphanProcesses();
+
+        // 扫描磁盘会话
+        scanDiskSessions();
 
         // 启动空闲进程清理任务
         cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -119,6 +128,23 @@ public class ClaudeApiService {
         PendingRequest(String message, CompletableFuture<String> future) {
             this.message = message;
             this.future = future;
+        }
+    }
+
+    // 磁盘会话信息
+    static class DiskSession {
+        String sessionId;
+        String pid;
+        String cwd;
+        long startedAt;
+        String status;
+
+        DiskSession(String sessionId, String pid, String cwd, long startedAt, String status) {
+            this.sessionId = sessionId;
+            this.pid = pid;
+            this.cwd = cwd;
+            this.startedAt = startedAt;
+            this.status = status;
         }
     }
 
@@ -804,6 +830,121 @@ public class ClaudeApiService {
         long minutes = seconds / 60;
         seconds = seconds % 60;
         return minutes + "m" + seconds + "s" + remainingMs + "ms";
+    }
+
+    // ==================== 磁盘会话管理 ====================
+
+    /**
+     * 扫描 ~/.claude/sessions/ 目录获取所有磁盘会话
+     */
+    public void scanDiskSessions() {
+        diskSessions.clear();
+        Path sessionsDir = Path.of(System.getProperty("user.home"), ".claude", "sessions");
+        if (!Files.exists(sessionsDir)) {
+            log.info("Claude sessions directory not found: {}", sessionsDir);
+            return;
+        }
+
+        try {
+            Files.list(sessionsDir)
+                .filter(path -> path.toString().endsWith(".json"))
+                .forEach(path -> {
+                    try {
+                        String content = new String(Files.readAllBytes(path));
+                        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(content);
+
+                        String sessionId = node.has("sessionId") ? node.get("sessionId").asText() : null;
+                        String pid = node.has("pid") ? node.get("pid").asText() : null;
+                        String cwd = node.has("cwd") ? node.get("cwd").asText() : null;
+                        long startedAt = node.has("startedAt") ? node.get("startedAt").asLong() : 0;
+                        String status = node.has("status") ? node.get("status").asText() : "unknown";
+
+                        if (sessionId != null) {
+                            diskSessions.add(new DiskSession(sessionId, pid, cwd, startedAt, status));
+                        }
+                    } catch (Exception e) {
+                        log.debug("Failed to parse session file: {}", path, e);
+                    }
+                });
+
+            log.info("Found {} disk sessions", diskSessions.size());
+        } catch (Exception e) {
+            log.error("Failed to scan disk sessions", e);
+        }
+    }
+
+    /**
+     * 获取所有磁盘会话列表
+     */
+    public List<DiskSession> getDiskSessions() {
+        scanDiskSessions();
+        return diskSessions;
+    }
+
+    /**
+     * 从磁盘恢复会话
+     */
+    public boolean resumeDiskSession(String userId, String sessionId) {
+        // 检查会话是否存在
+        boolean exists = diskSessions.stream().anyMatch(s -> s.sessionId.equals(sessionId));
+        if (!exists) {
+            // 重新扫描一次
+            scanDiskSessions();
+            exists = diskSessions.stream().anyMatch(s -> s.sessionId.equals(sessionId));
+        }
+
+        if (exists) {
+            sessionIds.put(userId, sessionId);
+            sessionHistory.computeIfAbsent(userId, k -> new ArrayList<>());
+            if (!sessionHistory.get(userId).contains(sessionId)) {
+                sessionHistory.get(userId).add(sessionId);
+            }
+            log.info("Resumed disk session {} for user: {}", sessionId, userId);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 清理孤儿进程（不属于当前服务的 Claude 进程）
+     * 在服务启动时调用，清理异常关闭后遗留的子进程
+     */
+    public void cleanupOrphanProcesses() {
+        log.info("Checking for orphan Claude processes...");
+
+        try {
+            // 获取当前 Java 进程的 PID
+            long currentPid = ProcessHandle.current().pid();
+
+            // 遍历所有 Java 子进程
+            ProcessHandle.allProcesses()
+                .filter(ph -> ph.info().command().map(cmd -> cmd.contains("claude")).orElse(false))
+                .forEach(ph -> {
+                    // 检查父进程是否是当前 Java 进程
+                    ph.parent().ifPresent(parent -> {
+                        if (parent.pid() == currentPid) {
+                            // 这是当前服务的子进程，不处理
+                            return;
+                        }
+
+                        // 检查父进程是否还活着
+                        if (!parent.isAlive()) {
+                            // 父进程已死，这是孤儿进程
+                            log.info("Found orphan Claude process: PID={}, killing...", ph.pid());
+                            ph.destroyForcibly();
+                        }
+                    });
+
+                    // 没有父进程的也是孤儿
+                    if (ph.parent().isEmpty()) {
+                        log.info("Found orphan Claude process (no parent): PID={}, killing...", ph.pid());
+                        ph.destroyForcibly();
+                    }
+                });
+
+        } catch (Exception e) {
+            log.error("Failed to cleanup orphan processes", e);
+        }
     }
 
     // ==================== Getters and Setters ====================

@@ -70,6 +70,8 @@ public class MessageRouter {
     private static final String V_IDLE = "v-idle";
     private static final String V_PREFER = "v-prefer";
     private static final String V_STOP = "v-stop";
+    private static final String V_DISK_SESSIONS = "v-disk-sessions";
+    private static final String V_RESUME = "v-resume";
 
     // 彩蛋关键词映射
     private final Map<String, String> easterEggs = new ConcurrentHashMap<>();
@@ -361,6 +363,8 @@ public class MessageRouter {
             case V_IDLE -> handleIdleTimeoutCommand(userId, parts, contextToken);
             case V_PREFER -> handlePreferCommand(userId, parts, contextToken);
             case V_STOP -> handleStopCommand(userId, contextToken);
+            case V_DISK_SESSIONS -> handleDiskSessionsCommand(userId, contextToken);
+            case V_RESUME -> handleResumeCommand(userId, parts, contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -435,6 +439,7 @@ public class MessageRouter {
                 |------|------|------|------|
                 | `v-new` / `v-clear` | 新建/清空会话 | `v-sessions` | 列出会话 |
                 | `v-session <id>` | 切换会话 | `v-delete <id>` | 删除会话 |
+                | `v-disk-sessions` | 查看磁盘会话 | `v-resume <id>` | 恢复磁盘会话 |
                 | `v-save <name>` | 保存配置 | `v-profiles` | 列出预设 |
 
                 **关键词过滤**
@@ -451,7 +456,8 @@ public class MessageRouter {
 
                 **注意事项**
                 服务重启后，内存中的进程池和会话记录会清空，首次发消息将自动创建新进程。
-                Claude 的磁盘会话（~/.claude/sessions）仍保留，可通过 `v-session <id>` 恢复。
+                异常关闭导致的孤儿进程会在服务启动时自动清理。
+                Claude 的磁盘会话（~/.claude/sessions）仍保留，可通过 `v-resume <id>` 恢复。
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
@@ -776,5 +782,60 @@ public class MessageRouter {
 
     private com.chengxun.vibewechat.config.ClaudeConfig claudeConfig() {
         return claudeApiService.getClaudeConfig();
+    }
+
+    private void handleDiskSessionsCommand(String userId, String contextToken) {
+        java.util.List<ClaudeApiService.DiskSession> sessions = claudeApiService.getDiskSessions();
+        StringBuilder sb = new StringBuilder("**磁盘会话列表:**\n\n");
+
+        if (sessions.isEmpty()) {
+            sb.append("暂无磁盘会话");
+        } else {
+            sb.append("| 序号 | Session ID | 状态 | 工作目录 | 启动时间 |\n");
+            sb.append("|------|------------|------|----------|----------|\n");
+
+            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("MM-dd HH:mm");
+            for (int i = 0; i < sessions.size(); i++) {
+                ClaudeApiService.DiskSession s = sessions.get(i);
+                String time = s.startedAt > 0 ? sdf.format(new java.util.Date(s.startedAt)) : "未知";
+                String shortId = s.sessionId.length() > 8 ? s.sessionId.substring(0, 8) + "..." : s.sessionId;
+                String cwd = s.cwd != null ? (s.cwd.length() > 20 ? "..." + s.cwd.substring(s.cwd.length() - 17) : s.cwd) : "未知";
+                sb.append(String.format("| %d | `%s` | %s | `%s` | %s |\n",
+                    i + 1, shortId, s.status, cwd, time));
+            }
+            sb.append("\n使用 `v-resume <序号或Session ID>` 恢复会话");
+        }
+        ilinkService.sendText(userId, sb.toString(), contextToken);
+    }
+
+    private void handleResumeCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-resume <序号或Session ID>\n使用 v-disk-sessions 查看可用会话", contextToken);
+            return;
+        }
+
+        String target = parts[1];
+        java.util.List<ClaudeApiService.DiskSession> sessions = claudeApiService.getDiskSessions();
+
+        // 尝试按序号匹配
+        try {
+            int index = Integer.parseInt(target) - 1;
+            if (index >= 0 && index < sessions.size()) {
+                String sessionId = sessions.get(index).sessionId;
+                if (claudeApiService.resumeDiskSession(userId, sessionId)) {
+                    ilinkService.sendText(userId, "已恢复会话: " + sessionId + "\n新请求将使用此会话", contextToken);
+                    return;
+                }
+            }
+        } catch (NumberFormatException e) {
+            // 不是数字，尝试作为 sessionId 匹配
+        }
+
+        // 尝试按 sessionId 匹配
+        if (claudeApiService.resumeDiskSession(userId, target)) {
+            ilinkService.sendText(userId, "已恢复会话: " + target + "\n新请求将使用此会话", contextToken);
+        } else {
+            ilinkService.sendText(userId, "未找到会话: " + target + "\n使用 v-disk-sessions 查看可用会话", contextToken);
+        }
     }
 }
