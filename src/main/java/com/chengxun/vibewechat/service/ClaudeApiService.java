@@ -1181,8 +1181,19 @@ public class ClaudeApiService {
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
         int contextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
-        return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s",
-                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo);
+
+        // 自动压缩检查：超过阈值时清除会话以压缩上下文
+        String compactionInfo = "";
+        if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
+            // 清除当前会话，下次消息将使用新会话（自动压缩）
+            sessionIds.remove(userId);
+            destroyProcessGroup(userId);
+            compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "% 超过阈值 " + claudeConfig.getContextCompactionThreshold() + "%）\n下次消息将使用新会话";
+            log.info("Auto compaction triggered for user: {}, context: {}%", userId, contextPercent);
+        }
+
+        return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s%s",
+                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo, compactionInfo);
     }
 
     private int parseContextWindowSize(String model) {

@@ -21,6 +21,9 @@ public class ClaudeConfig {
     private long processIdleTimeoutMs = 86400000;  // 24小时空闲自动销毁
     private long processStartTimeoutMs = 30000;    // 启动超时30秒
 
+    // 自动压缩配置
+    private int contextCompactionThreshold = 80;   // 上下文使用超过80%时自动压缩
+
     public void setMaxProcessesPerUser(int max) {
         int maxAllowed = Runtime.getRuntime().availableProcessors() * 2;
         this.maxProcessesPerUser = Math.max(1, Math.min(max, maxAllowed));
