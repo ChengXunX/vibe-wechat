@@ -197,6 +197,10 @@ public class ClaudeApiService {
         // 3. 进程池为空时创建父进程 Worker
         if (pool.isEmpty()) {
             ClaudeProcess cp = createNewWorker(userId, pool, true);
+            if (!attachCliProcess(cp, userId)) {
+                pool.remove(cp);
+                return null; // 创建失败
+            }
             return cp;
         }
 
