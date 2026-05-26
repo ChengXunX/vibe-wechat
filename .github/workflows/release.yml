@@ -50,6 +50,7 @@ jobs:
             ${{ matrix.type == 'deb' && '--linux-package-name vibe-wechat' || '' }}
 
       - name: List generated files
+        shell: bash
         run: ls -la
 
       - name: Upload artifact
