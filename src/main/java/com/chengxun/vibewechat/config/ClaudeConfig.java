@@ -15,4 +15,10 @@ public class ClaudeConfig {
     private String installPath = "";
     private int contextWindowSize = 200000;
     private String workDir = "";
+
+    // 常驻进程配置
+    private int maxProcessesPerUser = 5;
+    private long processIdleTimeoutMs = 86400000;  // 24小时空闲自动销毁
+    private long processStartTimeoutMs = 30000;    // 启动超时30秒
+    private boolean preferNewProcess = false;        // 排队时优先排队等待（而非创建新进程）
 }

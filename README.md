@@ -8,6 +8,7 @@
 |------|------|
 | 微信扫码登录 | 生成二维码，扫码连接 ilink |
 | Claude 对话 | 通过微信与 Claude CLI 对话 |
+| 常驻进程池 | Claude CLI 常驻运行，支持多进程并行 |
 | 消息过滤 | 配置通知内容（工具调用、文件操作等） |
 | 会话管理 | 新建/切换/清空会话 |
 | 一键配置 | 微信命令快速配置 API Key 和模型 |
@@ -56,7 +57,7 @@ cd /home/chengxun/vibe-wechat
 | `v-key <key>` | API Key |
 | `v-model <name>` | 模型 |
 | `v-claude <path>` | 安装路径 |
-| `v-thinking <级别>` | 推理模式 (low/medium/high/max/off) |
+| `v-thinking <级别>` | 推理模式 (low/medium/high/max/off/default) |
 | `v-switch <name>` | 切换配置 |
 | `v-save <name>` | 保存配置 |
 | `v-profiles` | 列出预设 |
@@ -65,7 +66,8 @@ cd /home/chengxun/vibe-wechat
 
 | 命令 | 说明 |
 |------|------|
-| `v-cd <path>` | 切换工作目录 |
+| `v-cd <path>` | 切换工作目录（保留上下文） |
+| `v-cd <path> clear` | 切换工作目录（清空上下文） |
 
 ### 通知配置
 
@@ -94,6 +96,26 @@ cd /home/chengxun/vibe-wechat
 | `v-sessions` | 列出会话 |
 | `v-session <id>` | 切换会话 |
 | `v-delete <id>` | 删除会话 |
+
+### 进程管理
+
+| 命令 | 说明 |
+|------|------|
+| `v-processes` | 查看进程状态 |
+| `v-maxproc <数量>` | 设置最大进程数 (1-10，默认5) |
+| `v-idle <秒>` | 设置空闲超时 (默认86400秒/24小时) |
+| `v-prefer new/queue` | 排队策略 (默认new: 优先新进程) |
+
+## 进程池特性
+
+| 特性 | 说明 |
+|------|------|
+| 常驻进程 | Claude CLI 启动后常驻运行，无需每次重启 |
+| 多进程并行 | 支持最多 5 个进程同时运行 |
+| 上下文保持 | 修改配置后自动恢复会话上下文 |
+| 空闲清理 | 24小时无操作自动销毁 |
+| 请求排队 | 进程忙碌时自动排队等待 |
+| 排队策略 | 可选优先创建新进程或排队等待 |
 
 ## 通知配置说明
 
@@ -128,6 +150,9 @@ vibe-wechat:
     api-key: ${CLAUDE_API_KEY:}
     api-url: ${CLAUDE_API_URL:https://api.anthropic.com}
     model: claude-sonnet-4-20250514
+    max-processes-per-user: 5
+    process-idle-timeout-ms: 86400000
+    prefer-new-process: true
   ilink:
     base-url: https://ilinkai.weixin.qq.com
     bot-token: ${ILINK_BOT_TOKEN:}

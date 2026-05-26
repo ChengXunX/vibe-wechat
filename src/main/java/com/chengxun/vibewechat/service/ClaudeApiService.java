@@ -8,14 +8,16 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
 
 @Slf4j
 @Service
@@ -30,18 +32,549 @@ public class ClaudeApiService {
     @Autowired
     private ThinkingConfig thinkingConfig;
 
-    private final Map<String, List<Map<String, String>>> conversationHistory = new ConcurrentHashMap<>();
+    @Autowired
+    private QuotaManager quotaManager;
+
+    // 会话管理（保留原有逻辑）
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
+    private final Map<String, String> subtaskNames = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastDurationMsMap = new ConcurrentHashMap<>();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    // 常驻进程池
+    private final Map<String, List<ClaudeProcess>> processPools = new ConcurrentHashMap<>();
+    private final Map<String, BlockingQueue<PendingRequest>> requestQueues = new ConcurrentHashMap<>();
+
+    // 空闲进程清理调度器
+    private ScheduledExecutorService cleanupScheduler;
 
     @PostConstruct
     public void init() {
         if (claudeConfig.getInstallPath() == null || claudeConfig.getInstallPath().isEmpty()) {
             detectClaudePath();
         }
+
+        // 启动空闲进程清理任务
+        cleanupScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "claude-process-cleanup");
+            t.setDaemon(true);
+            return t;
+        });
+        cleanupScheduler.scheduleAtFixedRate(this::cleanupIdleProcesses, 60, 60, TimeUnit.SECONDS);
     }
+
+    @PreDestroy
+    public void destroy() {
+        if (cleanupScheduler != null) {
+            cleanupScheduler.shutdown();
+        }
+        // 销毁所有进程
+        processPools.values().forEach(pool ->
+            pool.forEach(ClaudeProcess::destroy)
+        );
+        processPools.clear();
+    }
+
+    // ==================== 常驻进程内部类 ====================
+
+    static class ClaudeProcess {
+        Process process;
+        OutputStream stdin;
+        BufferedReader stdout;
+        BufferedReader stderr;
+        boolean busy = false;
+        String sessionId;
+        String thinkingLevel;
+        String workDir;
+        long lastActiveTime = System.currentTimeMillis();
+        long startTime = System.currentTimeMillis();
+
+        synchronized boolean isAlive() {
+            return process != null && process.isAlive();
+        }
+
+        synchronized void destroy() {
+            busy = false;
+            if (process != null) {
+                process.destroyForcibly();
+                process = null;
+            }
+            stdin = null;
+            stdout = null;
+            stderr = null;
+        }
+    }
+
+    static class PendingRequest {
+        String message;
+        CompletableFuture<String> future;
+
+        PendingRequest(String message, CompletableFuture<String> future) {
+            this.message = message;
+            this.future = future;
+        }
+    }
+
+    // ==================== 进程管理 ====================
+
+    private ClaudeProcess getOrCreateProcess(String userId) {
+        List<ClaudeProcess> pool = processPools.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>());
+
+        // 查找空闲进程
+        for (ClaudeProcess p : pool) {
+            if (p.isAlive() && !p.busy) {
+                return p;
+            }
+        }
+
+        // 检查进程数上限
+        if (pool.size() >= claudeConfig.getMaxProcessesPerUser()) {
+            return null; // 需要排队
+        }
+
+        // 根据配置决定：优先创建新进程还是排队
+        if (claudeConfig.isPreferNewProcess()) {
+            // 优先创建新进程（自动加载上下文）
+            return startNewProcess(userId, pool);
+        } else {
+            // 优先排队等待空闲进程
+            return null;
+        }
+    }
+
+    private ClaudeProcess startNewProcess(String userId, List<ClaudeProcess> pool) {
+        String installPath = claudeConfig.getInstallPath();
+        if (installPath == null || installPath.isEmpty()) {
+            return null;
+        }
+
+        try {
+            List<String> command = new ArrayList<>();
+            command.add(installPath);
+            command.add("--print");
+            command.add("--input-format");
+            command.add("stream-json");
+            command.add("--output-format");
+            command.add("stream-json");
+            command.add("--verbose");
+            command.add("--dangerously-skip-permissions");
+
+            // 模型配置
+            String model = claudeConfig.getModel();
+            if (model != null && !model.isEmpty()) {
+                command.add("--model");
+                command.add(model);
+            }
+
+            // thinking 配置
+            if (thinkingConfig.isEnabled()) {
+                String settingsJson = "{\"thinking\":{\"budget_tokens\":" + thinkingConfig.getCurrentBudgetTokens() + "}}";
+                command.add("--settings");
+                command.add(settingsJson);
+            }
+
+            // 检查是否有待恢复的 session
+            String sessionId = sessionIds.get(userId);
+            if (sessionId != null) {
+                command.add("--resume");
+                command.add(sessionId);
+                log.info("Resuming session {} for user: {}", sessionId, userId);
+            }
+
+            // 工作目录
+            String workDir = claudeConfig.getWorkDir();
+            if (workDir == null || workDir.isEmpty()) {
+                workDir = System.getProperty("user.dir");
+            }
+
+            log.info("Starting persistent Claude CLI process for user: {}, model: {}", userId, model);
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(false);
+            if (workDir != null && !workDir.isEmpty()) {
+                pb.directory(new java.io.File(workDir));
+            }
+
+            Process process = pb.start();
+
+            ClaudeProcess cp = new ClaudeProcess();
+            cp.process = process;
+            cp.stdin = process.getOutputStream();
+            cp.stdout = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            cp.stderr = new BufferedReader(new InputStreamReader(process.getErrorStream()));
+            cp.workDir = workDir;
+            cp.thinkingLevel = thinkingConfig.getLevel();
+
+            pool.add(cp);
+            quotaManager.processStarted(userId);
+
+            // 启动 stderr 读取线程（用于日志）
+            Thread stderrThread = new Thread(() -> {
+                try {
+                    String line;
+                    while ((line = cp.stderr.readLine()) != null) {
+                        log.debug("Claude stderr: {}", line);
+                    }
+                } catch (Exception e) {
+                    // ignore
+                }
+            });
+            stderrThread.setDaemon(true);
+            stderrThread.start();
+
+            log.info("Claude CLI process started for user: {}", userId);
+            return cp;
+
+        } catch (Exception e) {
+            log.error("Failed to start Claude CLI process for user: {}", userId, e);
+            return null;
+        }
+    }
+
+    // ==================== 消息发送 ====================
+
+    public CompletableFuture<String> sendMessageAsync(String userId, String message) {
+        CompletableFuture<String> future = new CompletableFuture<>();
+
+        // 检查配额
+        if (!quotaManager.canSendToolMessage(userId)) {
+            future.complete("消息次数已达上限（10条），请等待当前任务完成");
+            return future;
+        }
+
+        ClaudeProcess cp = getOrCreateProcess(userId);
+        if (cp == null) {
+            // 进程数达上限，加入队列
+            BlockingQueue<PendingRequest> queue = requestQueues.computeIfAbsent(userId,
+                    k -> new LinkedBlockingQueue<>());
+            queue.offer(new PendingRequest(message, future));
+            log.info("Request queued for user: {}, queue size: {}", userId, queue.size());
+            return future;
+        }
+
+        // 异步处理请求
+        cp.busy = true;
+        cp.lastActiveTime = System.currentTimeMillis();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                String response = processMessage(cp, userId, message);
+                future.complete(response);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            } finally {
+                cp.busy = false;
+                quotaManager.processEnded(userId);
+                processNextInQueue(userId);
+            }
+        });
+
+        return future;
+    }
+
+    private String processMessage(ClaudeProcess cp, String userId, String message) {
+        long startTime = System.currentTimeMillis();
+
+        try {
+            // 通过 stdin 发送消息
+            String jsonMessage = objectMapper.writeValueAsString(
+                    Map.of("type", "user_message", "content", message));
+            cp.stdin.write((jsonMessage + "\n").getBytes());
+            cp.stdin.flush();
+
+            // 读取响应
+            StringBuilder output = new StringBuilder();
+            String line;
+            while ((line = cp.stdout.readLine()) != null) {
+                if (line.isEmpty()) continue;
+
+                try {
+                    com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
+                    String type = node.get("type").asText();
+
+                    if ("assistant".equals(type)) {
+                        com.fasterxml.jackson.databind.JsonNode messageNode = node.get("message");
+                        if (messageNode != null) {
+                            com.fasterxml.jackson.databind.JsonNode contentNode = messageNode.get("content");
+                            if (contentNode != null && contentNode.isArray()) {
+                                for (com.fasterxml.jackson.databind.JsonNode item : contentNode) {
+                                    String itemType = item.get("type").asText();
+                                    if ("text".equals(itemType)) {
+                                        output.append(item.get("text").asText());
+                                    } else if ("tool_use".equals(itemType)) {
+                                        String toolName = item.get("name").asText();
+                                        String toolInput = item.get("input").toString();
+                                        if (toolCallback != null) {
+                                            toolCallback.onToolUse(userId, toolName, toolInput);
+                                            if (isSubtaskTool(toolName)) {
+                                                String subtaskStatus = extractSubtaskStatus(toolName, toolInput);
+                                                if (subtaskStatus != null) {
+                                                    boolean isCompleted = isSubtaskCompleted(toolName, toolInput);
+                                                    toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if ("result".equals(type)) {
+                        // 保存 session_id
+                        com.fasterxml.jackson.databind.JsonNode sessionNode = node.get("session_id");
+                        if (sessionNode != null) {
+                            cp.sessionId = sessionNode.asText();
+                            sessionIds.put(userId, sessionNode.asText());
+                            sessionHistory.computeIfAbsent(userId, k -> new ArrayList<>());
+                            if (!sessionHistory.get(userId).contains(sessionNode.asText())) {
+                                sessionHistory.get(userId).add(sessionNode.asText());
+                            }
+                        }
+
+                        // 解析 token 使用量
+                        com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
+                        if (usage != null) {
+                            int inputTokens = usage.get("input_tokens").asInt();
+                            int outputTokens = usage.get("output_tokens").asInt();
+                            TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
+                            tokenUsage.add(inputTokens, outputTokens);
+                        }
+
+                        // 收到 result，退出循环
+                        break;
+                    }
+                } catch (Exception e) {
+                    // 非 JSON 行，可能是纯文本输出
+                    output.append(line).append("\n");
+                }
+            }
+
+            long duration = System.currentTimeMillis() - startTime;
+            lastDurationMsMap.put(userId, duration);
+
+            String result = output.toString().trim();
+            log.info("Claude process responded in {}ms for user: {}", duration, userId);
+
+            return result.isEmpty() ? "Claude 未返回结果" : result;
+
+        } catch (Exception e) {
+            log.error("Failed to process message for user: {}", userId, e);
+            // 进程可能已死亡，销毁并标记
+            cp.destroy();
+            return "Claude 执行异常: " + e.getMessage();
+        }
+    }
+
+    private void processNextInQueue(String userId) {
+        BlockingQueue<PendingRequest> queue = requestQueues.get(userId);
+        if (queue == null || queue.isEmpty()) return;
+
+        PendingRequest next = queue.poll();
+        if (next != null) {
+            sendMessageAsync(userId, next.message).whenComplete((result, ex) -> {
+                if (ex != null) {
+                    next.future.completeExceptionally(ex);
+                } else {
+                    next.future.complete(result);
+                }
+            });
+        }
+    }
+
+    // ==================== 进程管理命令 ====================
+
+    public void destroyProcess(String userId) {
+        List<ClaudeProcess> pool = processPools.remove(userId);
+        if (pool != null) {
+            pool.forEach(ClaudeProcess::destroy);
+        }
+        requestQueues.remove(userId);
+    }
+
+    public void destroyAllProcesses(String userId) {
+        destroyProcess(userId);
+    }
+
+    public void destroyAllProcessesForce(String userId) {
+        List<ClaudeProcess> pool = processPools.remove(userId);
+        if (pool != null) {
+            pool.forEach(ClaudeProcess::destroy);
+        }
+        requestQueues.remove(userId);
+    }
+
+    public void destroyProcessByIndex(String userId, int index) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool != null && index >= 0 && index < pool.size()) {
+            pool.remove(index).destroy();
+        }
+    }
+
+    public int getProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        return pool != null ? pool.size() : 0;
+    }
+
+    public boolean hasBusyProcesses(String userId) {
+        return getBusyProcessCount(userId) > 0;
+    }
+
+    public void forceStopAll(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool != null) {
+            for (ClaudeProcess p : pool) {
+                p.destroy();
+            }
+            pool.clear();
+        }
+        processPools.remove(userId);
+        requestQueues.remove(userId);
+    }
+
+    public int getBusyProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess p : pool) {
+            if (p.busy) count++;
+        }
+        return count;
+    }
+
+    public String getProcessStatus(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null || pool.isEmpty()) return "无活跃进程";
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < pool.size(); i++) {
+            ClaudeProcess p = pool.get(i);
+            sb.append(String.format("进程%d: %s | thinking=%s | session=%s | 状态=%s | 工作目录=%s\n",
+                    i + 1,
+                    p.isAlive() ? "运行中" : "已停止",
+                    p.thinkingLevel != null ? p.thinkingLevel : "默认",
+                    p.sessionId != null ? p.sessionId.substring(0, Math.min(8, p.sessionId.length())) + "..." : "无",
+                    p.busy ? "忙碌" : "空闲",
+                    p.workDir != null ? p.workDir : "默认"
+            ));
+        }
+        return sb.toString();
+    }
+
+    // ==================== 空闲进程清理 ====================
+
+    private void cleanupIdleProcesses() {
+        long now = System.currentTimeMillis();
+        long timeout = claudeConfig.getProcessIdleTimeoutMs();
+
+        processPools.forEach((userId, pool) -> {
+            // 先清理空闲超时的进程
+            pool.removeIf(p -> {
+                if (!p.busy && (now - p.lastActiveTime) > timeout) {
+                    log.info("Cleaning up idle Claude process for user: {}", userId);
+                    p.destroy();
+                    quotaManager.processEnded(userId);
+                    return true;
+                }
+                return false;
+            });
+
+            // 数量超限时，清理最早的空闲进程
+            int maxProcesses = claudeConfig.getMaxProcessesPerUser();
+            while (pool.size() > maxProcesses) {
+                // 找到最早的空闲进程
+                ClaudeProcess oldest = null;
+                long oldestTime = Long.MAX_VALUE;
+                for (ClaudeProcess p : pool) {
+                    if (!p.busy && p.lastActiveTime < oldestTime) {
+                        oldest = p;
+                        oldestTime = p.lastActiveTime;
+                    }
+                }
+                if (oldest != null) {
+                    log.info("Cleaning up excess Claude process for user: {}, pool size: {}", userId, pool.size());
+                    oldest.destroy();
+                    quotaManager.processEnded(userId);
+                    pool.remove(oldest);
+                } else {
+                    break; // 没有空闲进程可清理
+                }
+            }
+
+            // 如果池空了，移除
+            if (pool.isEmpty()) {
+                processPools.remove(userId);
+            }
+        });
+    }
+
+    // ==================== 工具调用回调 ====================
+
+    public interface ToolCallback {
+        void onToolUse(String userId, String toolName, String toolInput);
+        void onToolResult(String userId, String result);
+        void onSubtaskStatus(String userId, String status, boolean isCompleted);
+    }
+
+    private ToolCallback toolCallback;
+
+    public void setToolCallback(ToolCallback callback) {
+        this.toolCallback = callback;
+    }
+
+    private boolean isSubtaskTool(String toolName) {
+        return "TaskCreate".equals(toolName) || "TaskUpdate".equals(toolName)
+                || "TaskGet".equals(toolName) || "TaskList".equals(toolName);
+    }
+
+    private String extractSubtaskStatus(String toolName, String toolInput) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
+            return switch (toolName) {
+                case "TaskCreate" -> {
+                    String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
+                    String taskId = inputNode.has("taskId") ? inputNode.get("taskId").asText() : null;
+                    if (taskId != null && !subject.isEmpty()) {
+                        subtaskNames.put(taskId, subject);
+                    }
+                    yield "📋 创建子任务: " + subject;
+                }
+                case "TaskUpdate" -> {
+                    String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
+                    String taskId = inputNode.has("taskId") ? inputNode.get("taskId").asText() : "";
+                    String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
+                    if (!subject.isEmpty() && taskId != null) {
+                        subtaskNames.put(taskId, subject);
+                    } else if (taskId != null) {
+                        subject = subtaskNames.getOrDefault(taskId, "");
+                    }
+                    if ("completed".equals(status)) {
+                        yield "✅ 子任务完成" + (subject.isEmpty() ? "" : ": " + subject);
+                    }
+                    yield "🔄 子任务 " + status + (subject.isEmpty() ? "" : ": " + subject);
+                }
+                case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
+                case "TaskList" -> "📋 列出所有子任务";
+                default -> null;
+            };
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isSubtaskCompleted(String toolName, String toolInput) {
+        try {
+            if ("TaskUpdate".equals(toolName)) {
+                com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
+                return inputNode.has("status") && "completed".equals(inputNode.get("status").asText());
+            }
+        } catch (Exception e) {
+            // ignore
+        }
+        return false;
+    }
+
+    // ==================== 路径检测和配置加载 ====================
 
     private void detectClaudePath() {
         String[] commonPaths = {
@@ -86,7 +619,6 @@ public class ClaudeApiService {
             if (Files.exists(configFilePath)) {
                 String content = new String(Files.readAllBytes(configFilePath));
 
-                // 提取 ANTHROPIC_BASE_URL
                 int baseUrlStart = content.indexOf("\"ANTHROPIC_BASE_URL\":\"") + 22;
                 int baseUrlEnd = content.indexOf("\"", baseUrlStart);
                 if (baseUrlStart > 21 && baseUrlEnd > baseUrlStart) {
@@ -97,7 +629,6 @@ public class ClaudeApiService {
                     }
                 }
 
-                // 提取 ANTHROPIC_AUTH_TOKEN
                 int tokenStart = content.indexOf("\"ANTHROPIC_AUTH_TOKEN\":\"") + 23;
                 int tokenEnd = content.indexOf("\"", tokenStart);
                 if (tokenStart > 22 && tokenEnd > tokenStart) {
@@ -108,7 +639,6 @@ public class ClaudeApiService {
                     }
                 }
 
-                // 提取 ANTHROPIC_MODEL
                 int modelStart = content.indexOf("\"ANTHROPIC_MODEL\":\"") + 20;
                 int modelEnd = content.indexOf("\"", modelStart);
                 if (modelStart > 19 && modelEnd > modelStart) {
@@ -123,6 +653,8 @@ public class ClaudeApiService {
             log.error("Failed to load Claude config: {}", e.getMessage());
         }
     }
+
+    // ==================== Token 用量 ====================
 
     public static class TokenUsage {
         private int inputTokens = 0;
@@ -140,271 +672,12 @@ public class ClaudeApiService {
         public synchronized int getTotalTokens() { return totalTokens; }
     }
 
-    private final java.util.Map<String, Long> lastDurationMsMap = new ConcurrentHashMap<>();
-
-    public String sendMessage(String userId, String message) {
-        String installPath = claudeConfig.getInstallPath();
-        if (installPath == null || installPath.isEmpty()) {
-            return "Claude 未安装或路径未配置";
-        }
-
-        long startTime = System.currentTimeMillis();
-
-        try {
-            // 构建 Claude CLI 命令
-            List<String> command = new ArrayList<>();
-            command.add(installPath);
-            command.add("--print");
-            command.add("--output-format");
-            command.add("stream-json");
-            command.add("--verbose");
-            command.add("--dangerously-skip-permissions");
-
-            // 通过 --settings 传递 thinking 配置
-            if (thinkingConfig.isEnabled()) {
-                String settingsJson = "{\"thinking\":{\"budget_tokens\":" + thinkingConfig.getCurrentBudgetTokens() + "}}";
-                command.add("--settings");
-                command.add(settingsJson);
-            }
-
-            // 添加模型配置（支持 [1m] 等配置）
-            String model = claudeConfig.getModel();
-            if (model != null && !model.isEmpty()) {
-                command.add("--model");
-                command.add(model);
-            }
-
-            // 添加会话恢复（保持上下文）
-            String sessionId = sessionIds.get(userId);
-            if (sessionId != null) {
-                command.add("--resume");
-                command.add(sessionId);
-            }
-
-            // 添加消息（作为最后一个参数）
-            command.add(message);
-
-            log.info("Executing Claude CLI with model: {}", model);
-
-            ProcessBuilder pb = new ProcessBuilder(command);
-            pb.redirectErrorStream(true);
-
-            // 设置工作目录
-            String workDir = System.getProperty("user.dir");
-            if (workDir != null) {
-                pb.directory(new java.io.File(workDir));
-            }
-
-            Process process = pb.start();
-
-            // 读取流式输出
-            StringBuilder output = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    // 跳过警告信息行
-                    if (line.startsWith("Warning:") || line.startsWith("Error:")) {
-                        continue;
-                    }
-
-                    // 尝试解析 stream-json 格式
-                    try {
-                        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
-
-                        String type = node.get("type").asText();
-
-                        if ("assistant".equals(type)) {
-                            // 助手消息 - 提取文本和工具调用
-                            com.fasterxml.jackson.databind.JsonNode messageNode = node.get("message");
-                            if (messageNode != null) {
-                                com.fasterxml.jackson.databind.JsonNode contentNode = messageNode.get("content");
-                                if (contentNode != null && contentNode.isArray()) {
-                                    for (com.fasterxml.jackson.databind.JsonNode item : contentNode) {
-                                        String itemType = item.get("type").asText();
-                                        if ("text".equals(itemType)) {
-                                            output.append(item.get("text").asText());
-                                        } else if ("tool_use".equals(itemType)) {
-                                            // 工具调用
-                                            String toolName = item.get("name").asText();
-                                            String toolInput = item.get("input").toString();
-                                            if (toolCallback != null) {
-                                                toolCallback.onToolUse(userId, toolName, toolInput);
-                                                // 检测子任务相关工具，发送子任务状态通知
-                                                if (isSubtaskTool(toolName)) {
-                                                    String subtaskStatus = extractSubtaskStatus(toolName, toolInput);
-                                                    if (subtaskStatus != null) {
-                                                        boolean isCompleted = isSubtaskCompleted(toolName, toolInput);
-                                                        toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else if ("result".equals(type)) {
-                            // 最终结果 - 只提取 metadata，文本内容已从 assistant 消息获取
-                            // 保存 session_id
-                            com.fasterxml.jackson.databind.JsonNode sessionNode = node.get("session_id");
-                            if (sessionNode != null) {
-                                sessionIds.put(userId, sessionNode.asText());
-                                sessionHistory.computeIfAbsent(userId, k -> new java.util.ArrayList<>());
-                                if (!sessionHistory.get(userId).contains(sessionNode.asText())) {
-                                    sessionHistory.get(userId).add(sessionNode.asText());
-                                }
-                            }
-
-                            // 解析 token 使用量
-                            com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
-                            if (usage != null) {
-                                int inputTokens = usage.get("input_tokens").asInt();
-                                int outputTokens = usage.get("output_tokens").asInt();
-                                TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
-                                tokenUsage.add(inputTokens, outputTokens);
-                            }
-                        }
-                    } catch (Exception e) {
-                        // 非 JSON 行，可能是纯文本输出
-                        output.append(line).append("\n");
-                    }
-                }
-            }
-
-            int exitCode = process.waitFor();
-            long duration = System.currentTimeMillis() - startTime;
-            lastDurationMsMap.put(userId, duration);
-
-            String result = output.toString().trim();
-
-            log.info("Claude CLI completed in {}ms, exit code: {}", duration, exitCode);
-
-            if (exitCode == 0 && !result.isEmpty()) {
-                return result;
-            } else if (exitCode != 0) {
-                log.error("Claude CLI exited with code: {}, output: {}", exitCode, result);
-                return "Claude 执行失败 (exit code: " + exitCode + ")\n" + result;
-            } else {
-                return "Claude 未返回结果";
-            }
-        } catch (Exception e) {
-            log.error("Failed to execute Claude CLI", e);
-            return "Claude 执行异常: " + e.getMessage();
-        }
-    }
-
-    // 工具调用回调接口
-    public interface ToolCallback {
-        void onToolUse(String userId, String toolName, String toolInput);
-        void onToolResult(String userId, String result);
-        void onSubtaskStatus(String userId, String status, boolean isCompleted);
-    }
-
-    private ToolCallback toolCallback;
-
-    public void setToolCallback(ToolCallback callback) {
-        this.toolCallback = callback;
-    }
-
-    private boolean isSubtaskTool(String toolName) {
-        return "TaskCreate".equals(toolName) || "TaskUpdate".equals(toolName)
-                || "TaskGet".equals(toolName) || "TaskList".equals(toolName);
-    }
-
-    private String extractSubtaskStatus(String toolName, String toolInput) {
-        try {
-            com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
-            return switch (toolName) {
-                case "TaskCreate" -> "📋 创建子任务: " + (inputNode.has("subject") ? inputNode.get("subject").asText() : "");
-                case "TaskUpdate" -> {
-                    String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
-                    String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
-                    if ("completed".equals(status)) {
-                        yield "✅ 子任务完成" + (subject.isEmpty() ? "" : ": " + subject);
-                    }
-                    yield "🔄 子任务 " + status + (subject.isEmpty() ? "" : ": " + subject);
-                }
-                case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
-                case "TaskList" -> "📋 列出所有子任务";
-                default -> null;
-            };
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private boolean isSubtaskCompleted(String toolName, String toolInput) {
-        try {
-            if ("TaskUpdate".equals(toolName)) {
-                com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
-                return inputNode.has("status") && "completed".equals(inputNode.get("status").asText());
-            }
-        } catch (Exception e) {
-            // ignore
-        }
-        return false;
-    }
-
-    private String parseJsonResponse(String userId, String json) {
-        try {
-            // 使用 Jackson 解析 JSON
-            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(json);
-
-            // 获取 result 字段
-            com.fasterxml.jackson.databind.JsonNode resultNode = root.get("result");
-            String result = resultNode != null ? resultNode.asText() : "";
-
-            // 保存 session_id 用于维持上下文
-            com.fasterxml.jackson.databind.JsonNode sessionNode = root.get("session_id");
-            if (sessionNode != null) {
-                String sessionId = sessionNode.asText();
-                sessionIds.put(userId, sessionId);
-                // 添加到会话历史
-                sessionHistory.computeIfAbsent(userId, k -> new java.util.ArrayList<>());
-                if (!sessionHistory.get(userId).contains(sessionId)) {
-                    sessionHistory.get(userId).add(sessionId);
-                }
-            }
-
-            // 解析 token 使用量
-            com.fasterxml.jackson.databind.JsonNode usage = root.get("usage");
-            if (usage != null) {
-                int inputTokens = usage.get("input_tokens").asInt();
-                int outputTokens = usage.get("output_tokens").asInt();
-                TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
-                tokenUsage.add(inputTokens, outputTokens);
-            }
-
-            return result;
-        } catch (Exception e) {
-            log.error("Failed to parse JSON response", e);
-            return "解析响应失败";
-        }
-    }
-
-    private void parseJsonTokenUsage(String userId, String json) {
-        try {
-            int inputStart = json.indexOf("\"input_tokens\":") + 15;
-            int inputEnd = json.indexOf(",", inputStart);
-            if (inputStart > 14 && inputEnd > inputStart) {
-                int inputTokens = Integer.parseInt(json.substring(inputStart, inputEnd).trim());
-                int outputStart = json.indexOf("\"output_tokens\":", inputEnd) + 16;
-                int outputEnd = json.indexOf(",", outputStart);
-                if (outputStart > 15 && outputEnd > outputStart) {
-                    int outputTokens = Integer.parseInt(json.substring(outputStart, outputEnd).trim());
-                    TokenUsage usage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
-                    usage.add(inputTokens, outputTokens);
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Failed to parse token usage", e);
-        }
-    }
-
     public void clearHistory(String userId) {
-        conversationHistory.remove(userId);
         tokenUsageMap.remove(userId);
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
+        quotaManager.reset(userId);
+        destroyProcess(userId);
     }
 
     public String getSessionId(String userId) {
@@ -419,6 +692,7 @@ public class ClaudeApiService {
         List<String> history = sessionHistory.get(userId);
         if (history != null && history.contains(sessionId)) {
             sessionIds.put(userId, sessionId);
+            // 不销毁进程，让新请求自动创建新进程时使用 --resume
             return true;
         }
         return false;
@@ -427,17 +701,13 @@ public class ClaudeApiService {
     public boolean deleteSession(String userId, String sessionId) {
         List<String> history = sessionHistory.get(userId);
         if (history != null && history.remove(sessionId)) {
-            // 如果删除的是当前会话，清除当前会话
             if (sessionId.equals(sessionIds.get(userId))) {
                 sessionIds.remove(userId);
+                destroyProcess(userId);
             }
             return true;
         }
         return false;
-    }
-
-    public List<Map<String, String>> getHistory(String userId) {
-        return conversationHistory.getOrDefault(userId, new ArrayList<>());
     }
 
     public TokenUsage getTokenUsage(String userId) {
@@ -462,13 +732,12 @@ public class ClaudeApiService {
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
         int contextPercent = contextWindow > 0 ? (int) (usage.inputTokens * 100.0 / contextWindow) : 0;
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
-        return String.format("---\n📊 Token: %s in / %s out | ⏱️ %s%s%s",
+        return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s",
                 formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo);
     }
 
     private int parseContextWindowSize(String model) {
         if (model == null) return claudeConfig.getContextWindowSize();
-        // 从模型名称解析上下文窗口大小，如 "claude-sonnet-4-20250514[1m]"
         if (model.contains("[1m]") || model.contains("[1M]")) {
             return 1000000;
         } else if (model.contains("[200k]") || model.contains("[200K]")) {
@@ -487,7 +756,6 @@ public class ClaudeApiService {
     }
 
     public String getTaskSummary(String userId, String originalMessage) {
-        // 简单提取核心意图，避免调用 Claude CLI 造成延迟和重复内容
         try {
             String summary = extractCoreIntent(originalMessage);
             return summary.isEmpty() ? "任务处理完成" : summary;
@@ -497,18 +765,15 @@ public class ClaudeApiService {
     }
 
     private String extractCoreIntent(String message) {
-        // 移除常见的前缀和后缀
         String cleaned = message
                 .replaceAll("^(请|帮我|帮忙|麻烦|能不能|可以|是否|是不是|有没有)\\s*", "")
                 .replaceAll("(一下|吗|呢|吧|啊|哦|嗯|好的|谢谢|感谢)\\s*$", "")
                 .trim();
 
-        // 如果消息很短，直接返回
         if (cleaned.length() <= 15) {
             return cleaned;
         }
 
-        // 取第一个句子（到句号、问号、感叹号为止）
         String[] sentenceEnders = {"。", "！", "？", ".", "!", "?"};
         int minEnd = cleaned.length();
         for (String ender : sentenceEnders) {
@@ -522,7 +787,6 @@ public class ClaudeApiService {
             return cleaned.substring(0, minEnd + 1).trim();
         }
 
-        // 如果没有句子结束符，取前20个字符
         return cleaned.length() > 20 ? cleaned.substring(0, 20) + "..." : cleaned;
     }
 
@@ -540,108 +804,10 @@ public class ClaudeApiService {
         return minutes + "m" + seconds + "s" + remainingMs + "ms";
     }
 
-    private void parseTokenUsage(String userId, String responseBody) {
-        try {
-            int usageStart = responseBody.indexOf("\"usage\":{");
-            if (usageStart == -1) return;
+    // ==================== Getters and Setters ====================
 
-            int inputStart = responseBody.indexOf("\"input_tokens\":", usageStart) + 15;
-            int inputEnd = responseBody.indexOf(",", inputStart);
-            int inputTokens = Integer.parseInt(responseBody.substring(inputStart, inputEnd).trim());
+    public ClaudeConfig getClaudeConfig() { return claudeConfig; }
 
-            int outputStart = responseBody.indexOf("\"output_tokens\":", inputEnd) + 16;
-            int outputEnd = responseBody.indexOf("}", outputStart);
-            int outputTokens = Integer.parseInt(responseBody.substring(outputStart, outputEnd).trim());
-
-            TokenUsage usage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
-            usage.add(inputTokens, outputTokens);
-        } catch (Exception e) {
-            log.debug("Failed to parse token usage", e);
-        }
-    }
-
-    private String buildRequestBody(List<Map<String, String>> messages) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-
-        // 处理模型名：去除 [1m] 等后缀，这些是 CLI 设置不是 API 参数
-        String modelName = claudeConfig.getModel();
-        if (modelName != null && modelName.contains("[")) {
-            modelName = modelName.substring(0, modelName.indexOf("["));
-        }
-        sb.append("\"model\":\"").append(escapeJson(modelName)).append("\",");
-        sb.append("\"max_tokens\":").append(claudeConfig.getMaxTokens()).append(",");
-
-        // 添加 thinking 模式支持
-        if (thinkingConfig.isEnabled()) {
-            sb.append("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":")
-              .append(thinkingConfig.getCurrentBudgetTokens()).append("},");
-        }
-
-        sb.append("\"messages\":[");
-        for (int i = 0; i < messages.size(); i++) {
-            Map<String, String> msg = messages.get(i);
-            if (i > 0) sb.append(",");
-            sb.append("{\"role\":\"").append(msg.get("role")).append("\",\"content\":\"")
-              .append(escapeJson(msg.get("content"))).append("\"}");
-        }
-        sb.append("]}");
-        return sb.toString();
-    }
-
-    private String parseResponse(String responseBody) {
-        try {
-            int contentStart = responseBody.indexOf("\"text\":\"") + 8;
-            if (contentStart <= 7) return "解析响应失败";
-
-            // 找到文本内容的结束位置（处理转义的引号）
-            int contentEnd = contentStart;
-            boolean escaped = false;
-            while (contentEnd < responseBody.length()) {
-                char c = responseBody.charAt(contentEnd);
-                if (escaped) {
-                    escaped = false;
-                } else if (c == '\\') {
-                    escaped = true;
-                } else if (c == '"') {
-                    break;
-                }
-                contentEnd++;
-            }
-
-            if (contentEnd > contentStart) {
-                String text = responseBody.substring(contentStart, contentEnd);
-                // 处理 Unicode 转义
-                text = text.replace("\\n", "\n")
-                          .replace("\\\"", "\"")
-                          .replace("\\\\", "\\");
-                // 处理 Unicode surrogate pairs (如 😀)
-                java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\\\u([0-9a-fA-F]{4})");
-                java.util.regex.Matcher matcher = pattern.matcher(text);
-                StringBuffer sb = new StringBuffer();
-                while (matcher.find()) {
-                    int codePoint = Integer.parseInt(matcher.group(1), 16);
-                    matcher.appendReplacement(sb, new String(Character.toChars(codePoint)));
-                }
-                matcher.appendTail(sb);
-                return sb.toString();
-            }
-        } catch (Exception e) {
-            log.error("Failed to parse Claude response", e);
-        }
-        return "解析响应失败";
-    }
-
-    private String escapeJson(String str) {
-        if (str == null) return "";
-        return str.replace("\\", "\\\\")
-                  .replace("\"", "\\\"")
-                  .replace("\n", "\\n")
-                  .replace("\r", "\\r")
-                  .replace("\t", "\\t");
-    }
-
-    // Getters and Setters
     public String getApiKey() { return claudeConfig.getApiKey(); }
     public void setApiKey(String key) { claudeConfig.setApiKey(key); }
     public String getApiUrl() { return claudeConfig.getApiUrl(); }
@@ -655,7 +821,14 @@ public class ClaudeApiService {
     public int getContextWindowSize() { return claudeConfig.getContextWindowSize(); }
     public void setContextWindowSize(int size) { claudeConfig.setContextWindowSize(size); }
 
-    // ThinkingConfig getters
+    // 进程配置
+    public int getMaxProcessesPerUser() { return claudeConfig.getMaxProcessesPerUser(); }
+    public void setMaxProcessesPerUser(int max) { claudeConfig.setMaxProcessesPerUser(max); }
+    public long getProcessIdleTimeoutMs() { return claudeConfig.getProcessIdleTimeoutMs(); }
+    public void setProcessIdleTimeoutMs(long timeout) { claudeConfig.setProcessIdleTimeoutMs(timeout); }
+    public boolean isPreferNewProcess() { return claudeConfig.isPreferNewProcess(); }
+    public void setPreferNewProcess(boolean prefer) { claudeConfig.setPreferNewProcess(prefer); }
+
     public String getThinkingLevel() { return thinkingConfig.getLevel(); }
     public void setThinkingLevel(String level) { thinkingConfig.setLevel(level); }
     public boolean isThinkingEnabled() { return thinkingConfig.isEnabled(); }
