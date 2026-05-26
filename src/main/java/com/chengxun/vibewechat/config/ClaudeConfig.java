@@ -20,5 +20,9 @@ public class ClaudeConfig {
     private int maxProcessesPerUser = 5;
     private long processIdleTimeoutMs = 86400000;  // 24小时空闲自动销毁
     private long processStartTimeoutMs = 30000;    // 启动超时30秒
-    private boolean preferNewProcess = false;        // 排队时优先排队等待（而非创建新进程）
+
+    public void setMaxProcessesPerUser(int max) {
+        int maxAllowed = Runtime.getRuntime().availableProcessors() * 2;
+        this.maxProcessesPerUser = Math.max(1, Math.min(max, maxAllowed));
+    }
 }

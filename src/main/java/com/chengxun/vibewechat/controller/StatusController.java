@@ -1,6 +1,7 @@
 package com.chengxun.vibewechat.controller;
 
 import com.chengxun.vibewechat.service.IlInkService;
+import com.chengxun.vibewechat.service.ConfigService;
 import com.google.zxing.WriterException;
 import com.chengxun.vibewechat.util.QRCodeGenerator;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +24,9 @@ public class StatusController {
 
     @Autowired
     private IlInkService ilinkService;
+
+    @Autowired
+    private ConfigService configService;
 
     @Value("${vibe-wechat.ilink.base-url:https://ilinkai.weixin.qq.com}")
     private String ilinkBaseUrl;
@@ -154,6 +158,7 @@ public class StatusController {
                 if (start > 12 && end > start) {
                     String botToken = body.substring(start, end);
                     ilinkService.setBotToken(botToken);
+                    configService.saveConfig();
                     return Map.of("status", "confirmed", "bot_token", botToken);
                 }
                 // 提取状态

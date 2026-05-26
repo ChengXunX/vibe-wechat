@@ -33,6 +33,9 @@ public class ConfigService {
     @Autowired
     private ThinkingConfig thinkingConfig;
 
+    @Autowired
+    private IlInkConnectionHandler ilinkConnectionHandler;
+
     private final ObjectMapper objectMapper = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
 
@@ -94,6 +97,12 @@ public class ConfigService {
             }
             switchCfg.put("profiles", profiles);
             config.put("switch", switchCfg);
+
+            // 保存 ilink bot_token
+            String botToken = ilinkConnectionHandler.getBotToken();
+            if (botToken != null && !botToken.isEmpty()) {
+                config.put("ilink", Map.of("botToken", botToken));
+            }
 
             objectMapper.writeValue(new File(CONFIG_FILE), config);
             saveClaudeSettings();
@@ -335,6 +344,17 @@ public class ConfigService {
                             switchConfig.getProfiles().add(profile);
                         }
                     }
+                }
+            }
+
+            // 加载 ilink bot_token
+            @SuppressWarnings("unchecked")
+            Map<String, Object> ilinkCfg = (Map<String, Object>) config.get("ilink");
+            if (ilinkCfg != null && ilinkCfg.containsKey("botToken")) {
+                String botToken = (String) ilinkCfg.get("botToken");
+                if (botToken != null && !botToken.isEmpty()) {
+                    ilinkConnectionHandler.setBotToken(botToken);
+                    log.info("Loaded ilink bot_token from config");
                 }
             }
 

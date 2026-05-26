@@ -1,6 +1,7 @@
 package com.chengxun.vibewechat.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +23,9 @@ public class IlInkConnectionHandler {
 
     @Value("${vibe-wechat.ilink.base-url:https://ilinkai.weixin.qq.com}")
     private String baseUrl;
+
+    @Autowired
+    private QuotaManager quotaManager;
 
     private volatile boolean connected = false;
     private Consumer<String> messageHandler;
@@ -132,6 +136,7 @@ public class IlInkConnectionHandler {
                     if (msgs != null && msgs.isArray() && msgs.size() > 0) {
                         log.info("Received messages");
                         if (messageHandler != null) {
+                            // 同步处理消息（v-命令/彩蛋/欢迎语立即返回，Claude消息通过CompletableFuture异步处理）
                             messageHandler.accept(body);
                         }
                     }
@@ -158,16 +163,20 @@ public class IlInkConnectionHandler {
         int currentCount = messageCountsMap.compute(userId, (k, v) -> v == null ? 1 : v + 1);
         log.info("Send message: userId={}, type={}, count={}", userId, messageType, currentCount);
 
-        // 如果次数 >= 10 且不是最终结果，直接跳过
-        if (currentCount >= MESSAGE_LIMIT && !"result".equals(messageType)) {
+        // result 和 decision 类型始终发送，不受配额限制
+        boolean isUnlimitedType = "result".equals(messageType) || "decision".equals(messageType);
+
+        // 如果次数 >= 10 且不是不受限制的类型，直接跳过
+        if (currentCount >= MESSAGE_LIMIT && !isUnlimitedType) {
             log.info("Skipping non-result message at count {}", currentCount);
             return;
         }
 
-        // 如果次数 == 9 且不是最终结果，附加警告信息
+        // 计算预留配额：当前消息数 + 运行中的进程数 >= 10 时追加警告
+        int reservedQuota = quotaManager.getReservedQuota(userId);
         String finalText = text;
-        if (currentCount == MESSAGE_LIMIT - 1 && !"result".equals(messageType)) {
-            finalText = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（" + currentCount + "/" + MESSAGE_LIMIT + "）**\n> 后续工具通知将被屏蔽";
+        if (!isUnlimitedType && (currentCount + reservedQuota) >= MESSAGE_LIMIT - 1) {
+            finalText = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（" + currentCount + "/" + MESSAGE_LIMIT + "）**\n> 预留配额: " + reservedQuota + " 条\n> 后续工具通知将被屏蔽\n> 发送 `v-refresh` 可刷新配额以接收更多通知";
         }
 
         try {

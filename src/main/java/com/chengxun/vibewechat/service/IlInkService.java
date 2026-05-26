@@ -22,27 +22,34 @@ public class IlInkService {
     private final Set<String> connectedUsers = ConcurrentHashMap.newKeySet();
 
     public static final String WELCOME_MESSAGE = """
-            **🎉 欢迎使用 VibeWechat**
+# 🎉 欢迎使用 VibeWeChat
 
-            ---
+---
 
-            *直接发送消息即可与 Claude 对话*
+直接发送消息即可与 Claude 对话
 
-            ---
+---
 
-            **快速开始**
-            `v-config <key>` 一键配置
-            `v-switch <名称>` 切换配置
-            `v-help` 查看所有命令
+## 📌 快速开始
 
-            **常用命令**
-            `v-status` 查看配置
-            `v-new` 新建会话
+| 命令 | 说明 |
+|------|------|
+| `v-config <key>` | 一键配置 |
+| `v-switch <名称>` | 切换配置 |
+| `v-help` | 查看所有命令 |
 
-            ---
-            *Copyright 2026 ChengXun*
-            *GitHub: https://github.com/ChengXunX/vibe-wechat*
-            """;
+## 📌 常用命令
+
+| 命令 | 说明 |
+|------|------|
+| `v-status` | 查看系统状态 |
+| `v-new` | 新建会话 |
+| `v-refresh` | 刷新配额 (AI回复限制10次/24h) |
+
+---
+
+GitHub: https://github.com/ChengXunX/vibe-wechat
+""";
 
     @PostConstruct
     public void init() {

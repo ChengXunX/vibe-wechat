@@ -68,8 +68,12 @@ public class MessageRouter {
     private static final String V_PROCESSES = "v-processes";
     private static final String V_MAXPROC = "v-maxproc";
     private static final String V_IDLE = "v-idle";
-    private static final String V_PREFER = "v-prefer";
     private static final String V_STOP = "v-stop";
+    private static final String V_PROC = "v-proc";
+    private static final String V_FORK = "v-fork";
+    private static final String V_NEWPROC = "v-newproc";
+    private static final String V_DELPROC = "v-delproc";
+    private static final String V_REFRESH = "v-refresh";
     private static final String V_DISK_SESSIONS = "v-disk-sessions";
     private static final String V_RESUME = "v-resume";
 
@@ -98,7 +102,39 @@ public class MessageRouter {
         userContextTokens.put(event.getUserId(), event.getContextToken());
         ilinkService.resetMessageCount(event.getUserId());
         quotaManager.reset(event.getUserId());
-        handleMessage(event.getUserId(), event.getContent(), event.getContextToken(), event.isNewUser());
+
+        String userId = event.getUserId();
+        String content = event.getContent();
+        String contextToken = event.getContextToken();
+        boolean isNewUser = event.isNewUser();
+
+        // 欢迎语（新用户立即发送，不阻塞）
+        if (isNewUser) {
+            String welcome = IlInkService.WELCOME_MESSAGE;
+            if (configService.detectConflict()) {
+                welcome += "\n\n⚠️ 检测到 Claude settings 文件已被外部修改，已保存为「冲突配置」预设。\n如需恢复，请使用 `v-switch 冲突配置`";
+            }
+            ilinkService.sendText(userId, welcome, contextToken);
+        }
+
+        // v- 命令立即处理（不阻塞）
+        if (content.startsWith(V_PREFIX)) {
+            handleVibeCommand(userId, content, contextToken);
+            return;
+        }
+
+        // 彩蛋词立即返回（不阻塞）
+        String trimmedMessage = content.trim().toLowerCase();
+        if (easterEggs.containsKey(trimmedMessage)) {
+            ilinkService.sendText(userId, easterEggs.get(trimmedMessage), contextToken);
+            return;
+        }
+
+        // Claude 消息处理：异步执行，不阻塞轮询线程
+        // 进程组内排队策略：组内有空闲进程则并行执行，全部忙碌则排队等待
+        CompletableFuture.runAsync(() -> {
+            handleMessage(userId, content, contextToken, isNewUser);
+        });
     }
 
     @jakarta.annotation.PostConstruct
@@ -106,9 +142,17 @@ public class MessageRouter {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
             public void onToolUse(String userId, String toolName, String toolInput) {
-                if (!filterConfig.isShowToolCalls()) return;
-                if (!filterConfig.isShowFileRead() && isFileReadTool(toolName)) return;
-                if (!filterConfig.isShowFileEdit() && isFileEditTool(toolName)) return;
+                // 根据工具类型检查对应的过滤开关
+                boolean allowed = false;
+                if (isFileReadTool(toolName)) {
+                    allowed = filterConfig.isShowFileRead();
+                } else if (isFileEditTool(toolName)) {
+                    allowed = filterConfig.isShowFileEdit();
+                } else {
+                    allowed = filterConfig.isShowToolCalls();
+                }
+
+                if (!allowed) return;
 
                 // 检查配额
                 if (!quotaManager.canSendToolMessage(userId)) {
@@ -118,7 +162,15 @@ public class MessageRouter {
 
                 String contextToken = userContextTokens.get(userId);
                 String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
-                ilinkService.sendText(userId, "🔧 工具调用: " + toolName + "\n" + cleanInput, contextToken != null ? contextToken : "", "tool");
+                String prefix;
+                if (isFileReadTool(toolName)) {
+                    prefix = "📖 文件读取";
+                } else if (isFileEditTool(toolName)) {
+                    prefix = "✏️ 文件编辑";
+                } else {
+                    prefix = "🔧 工具调用";
+                }
+                ilinkService.sendText(userId, prefix + ": " + toolName + "\n" + cleanInput, contextToken != null ? contextToken : "", "tool");
                 quotaManager.recordMessageSent(userId, "tool");
             }
 
@@ -136,12 +188,20 @@ public class MessageRouter {
             public void onSubtaskStatus(String userId, String status, boolean isCompleted) {
                 boolean shouldNotify = isCompleted ? filterConfig.isShowSubtaskCompletion() : filterConfig.isShowSubtaskStatus();
                 if (shouldNotify) {
-                    if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
                     String messageType = isCompleted ? "subtask_completion" : "sub_result";
+                    // 子任务完成消息不消耗配额，其他子任务消息消耗配额
+                    if (!isCompleted && !quotaManager.canSendToolMessage(userId)) return;
                     ilinkService.sendText(userId, status, contextToken != null ? contextToken : "", messageType);
-                    quotaManager.recordMessageSent(userId, messageType);
+                    if (!isCompleted) {
+                        quotaManager.recordMessageSent(userId, messageType);
+                    }
                 }
+            }
+
+            @Override
+            public void onDecisionMessage(String userId, String message) {
+                // 决策消息不直接发送给用户，由最终结果统一返回
             }
         });
     }
@@ -162,27 +222,10 @@ public class MessageRouter {
     }
 
     public void handleMessage(String userId, String message, String contextToken, boolean isNewUser) {
-        if (message.startsWith(V_PREFIX)) {
-            handleVibeCommand(userId, message, contextToken);
-            return;
-        }
-
-        if (isNewUser) {
-            String welcome = IlInkService.WELCOME_MESSAGE;
-            if (configService.detectConflict()) {
-                welcome += "\n\n⚠️ 检测到 Claude settings 文件已被外部修改，已保存为「冲突配置」预设。\n如需恢复，请使用 `v-switch 冲突配置`";
-            }
-            ilinkService.sendText(userId, welcome, contextToken);
-        }
+        // v- 命令、欢迎语、彩蛋已在 handleIlInkMessage 中处理
 
         if (message.startsWith("/")) {
             handleClaudeCommand(userId, message, contextToken);
-            return;
-        }
-
-        String trimmedMessage = message.trim().toLowerCase();
-        if (easterEggs.containsKey(trimmedMessage)) {
-            ilinkService.sendText(userId, easterEggs.get(trimmedMessage), contextToken);
             return;
         }
 
@@ -198,10 +241,24 @@ public class MessageRouter {
             if (workDir == null || workDir.isEmpty()) workDir = System.getProperty("user.dir");
             String sessionDisplay = sessionId != null ? sessionId : "新会话";
             int processCount = claudeApiService.getProcessCount(userId);
-            String processHint = processCount == 0 ? "\n⚡ 首次使用，正在初始化 Claude 进程..." : "";
+            int busyCount = claudeApiService.getBusyProcessCount(userId);
+
+            // 根据进程组状态显示不同的处理提示
+            String statusHint;
+            if (processCount == 0) {
+                // 首次使用：没有进程，需要创建
+                statusHint = "\n⚡ 首次使用，正在创建进程并处理任务...";
+            } else if (processCount > busyCount) {
+                // 有空闲进程：直接处理
+                statusHint = "\n🚀 开始处理任务（空闲进程: " + (processCount - busyCount) + "）";
+            } else {
+                // 全部忙碌：排队等待
+                statusHint = "\n⏳ 进入等待队列（忙碌进程: " + busyCount + "/" + processCount + "）";
+            }
+
             String statusMsg = String.format(
-                "✅ 收到消息，开始处理...\n\n📋 会话ID: `%s`\n🤖 模型: `%s`\n📁 工作目录: `%s`\n⚙️ 进程数: %d%s",
-                sessionDisplay, model, workDir, processCount, processHint
+                "✅ 收到消息\n\n📋 会话ID: `%s`\n🤖 模型: `%s`\n📁 工作目录: `%s`\n⚙️ 进程: %d 个%s",
+                sessionDisplay, model, workDir, processCount, statusHint
             );
             ilinkService.sendText(userId, statusMsg, contextToken, "result");
             quotaManager.recordMessageSent(userId, "result");
@@ -333,20 +390,34 @@ public class MessageRouter {
                     if (!dir.exists() || !dir.isDirectory()) {
                         ilinkService.sendText(userId, "目录不存在: " + parts[1] + "\n请先使用 AI 工具创建该目录", contextToken);
                     } else {
-                        System.setProperty("user.dir", dir.getAbsolutePath());
-                        claudeApiService.setWorkDir(dir.getAbsolutePath());
-                        configService.saveConfig();
-                        // 检查是否需要清理上下文
                         boolean clearContext = parts.length > 2 && "clear".equalsIgnoreCase(parts[2]);
-                        if (clearContext) {
-                            claudeApiService.clearHistory(userId);
-                            ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n上下文已清空，新会话开始", contextToken);
+                        boolean force = parts.length > 3 && "force".equalsIgnoreCase(parts[3]);
+                        int busyCount = claudeApiService.getBusyProcessCount(userId);
+
+                        // 检查是否需要清理上下文且进程组繁忙
+                        if (clearContext && busyCount > 0 && !force) {
+                            ilinkService.sendText(userId, "⚠️ 进程组繁忙中（" + busyCount + " 个进程忙碌），无法清空上下文\n\n请等待任务完成，或使用 `v-cd <路径> clear force` 强制停止所有任务后切换", contextToken);
                         } else {
-                            ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n新请求将使用新目录（保留上下文）", contextToken);
+                            // 如果需要清理上下文且进程组繁忙且 force=true，先强制停止
+                            if (clearContext && busyCount > 0 && force) {
+                                claudeApiService.forceStopAll(userId);
+                                ilinkService.sendText(userId, "⚠️ 已强制停止 " + busyCount + " 个忙碌进程", contextToken);
+                            }
+
+                            System.setProperty("user.dir", dir.getAbsolutePath());
+                            claudeApiService.setWorkDir(dir.getAbsolutePath());
+                            configService.saveConfig();
+
+                            if (clearContext) {
+                                claudeApiService.clearHistory(userId);
+                                ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n上下文已清空，新会话开始", contextToken);
+                            } else {
+                                ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n新请求将使用新目录（保留上下文）", contextToken);
+                            }
                         }
                     }
                 } else {
-                    ilinkService.sendText(userId, "用法: v-cd <路径> [clear]\n添加 clear 清空上下文", contextToken);
+                    ilinkService.sendText(userId, "用法: v-cd <路径> [clear] [force]\n- clear: 清空上下文\n- force: 强制停止繁忙任务后切换（需与 clear 配合）", contextToken);
                 }
             }
             case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); configService.saveConfig(); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }
@@ -360,11 +431,12 @@ public class MessageRouter {
             case V_DELETE -> handleDeleteSessionCommand(userId, parts, contextToken);
             case V_PROCESSES -> handleProcessStatus(userId, contextToken);
             case V_MAXPROC -> handleMaxProcCommand(userId, parts, contextToken);
-            case V_IDLE -> handleIdleTimeoutCommand(userId, parts, contextToken);
-            case V_PREFER -> handlePreferCommand(userId, parts, contextToken);
-            case V_STOP -> handleStopCommand(userId, contextToken);
-            case V_DISK_SESSIONS -> handleDiskSessionsCommand(userId, contextToken);
-            case V_RESUME -> handleResumeCommand(userId, parts, contextToken);
+            case V_STOP -> handleStopCommand(userId, parts, contextToken);
+            case V_PROC -> handleProcCommand(userId, parts, contextToken);
+            case V_FORK -> handleForkCommand(userId, parts, contextToken);
+            case V_NEWPROC -> handleNewProcCommand(userId, parts, contextToken);
+            case V_DELPROC -> handleDelProcCommand(userId, parts, contextToken);
+            case V_REFRESH -> ilinkService.sendText(userId, "✅ 已刷新配额\n\n本条消息也占一条配额", contextToken);
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -392,72 +464,127 @@ public class MessageRouter {
     private void handleProcessStatus(String userId, String contextToken) {
         String status = claudeApiService.getProcessStatus(userId);
         int count = claudeApiService.getProcessCount(userId);
+        int forkCount = claudeApiService.getForkChildCount(userId);
         String quotaStatus = quotaManager.getStatus(userId);
-        String preferMode = claudeApiService.isPreferNewProcess() ? "优先新进程" : "优先排队";
-        // 计算忙碌进程数
         int busyCount = claudeApiService.getBusyProcessCount(userId);
-        ilinkService.sendText(userId, String.format("**进程状态** (共%d个, 忙碌%d个)\n\n%s\n\n**排队策略**: %s\n\n**配额状态**\n%s", count, busyCount, status, preferMode, quotaStatus), contextToken);
+        ilinkService.sendText(userId, String.format("**进程状态** (共%d个, 父进程1个, fork子进程%d个, 忙碌%d个)\n\n%s\n\n💡 使用 `v-session <序号>` 切换进程\n\n**配额状态**\n%s", count, forkCount, busyCount, status, quotaStatus), contextToken);
     }
 
     private void showHelp(String userId, String contextToken) {
         String help = """
-                **VibeWeChat 命令列表**
+                **🤖 VibeWeChat 命令帮助**
 
-                **基础命令**
-                | 命令 | 说明 | 命令 | 说明 |
-                |------|------|------|------|
-                | `v-help` | 显示此帮助 | `v-status` | 显示当前配置 |
-                | `v-processes` | 查看进程状态 | | |
+                ---
 
-                **Claude 配置**
-                | 命令 | 说明 | 命令 | 说明 |
-                |------|------|------|------|
-                | `v-model <name>` | 设置模型 | `v-thinking <级别>` | 推理模式 |
-                | `v-claude <path>` | 安装路径 | `v-api <url>` | API 地址 |
-                | `v-key <key>` | API Key | `v-cd <path> [clear]` | 切换目录 |
-                | `v-config <key> [url] [model]` | 一键配置 | `v-switch <name>` | 切换配置 |
-                | `v-maxproc <数量>` | 最大进程数 | `v-idle <秒>` | 空闲超时 |
-                | `v-prefer <new|queue>` | 排队策略 | | |
+                **📋 基础命令**
 
-                **推理模式** (v-thinking)
-                | 级别 | 说明 | 级别 | 说明 |
-                |------|------|------|------|
-                | `low` | 1k tokens | `medium` | 5k tokens |
-                | `high` | 10k tokens | `max` | 32k tokens |
-                | `off` | 关闭推理 | `default` | 查看默认配置 |
+                | 命令 | 说明 |
+                |------|------|
+                | `v-help` | 显示此帮助信息 |
+                | `v-status` | 查看系统完整状态 |
+                | `v-processes` | 查看进程列表和状态 |
+                | `v-refresh` | 刷新消息配额（10条/24h） |
 
-                **通知配置** (true/false)
-                | 命令 | 说明 | 命令 | 说明 |
-                |------|------|------|------|
-                | `v-notify` | 消息状态通知 | `v-tools` | 工具调用通知 |
-                | `v-fileread` | 文件读取通知 | `v-fileedit` | 文件编辑通知 |
-                | `v-subtask` | 子任务状态通知 | `v-subtask-done` | 子任务完成通知 |
-                | `v-token` | 查看/开关Token统计 | | |
+                ---
 
-                **会话管理**
-                | 命令 | 说明 | 命令 | 说明 |
-                |------|------|------|------|
-                | `v-new` / `v-clear` | 新建/清空会话 | `v-sessions` | 列出会话 |
-                | `v-session <id>` | 切换会话 | `v-delete <id>` | 删除会话 |
-                | `v-disk-sessions` | 查看磁盘会话 | `v-resume <id>` | 恢复磁盘会话 |
-                | `v-save <name>` | 保存配置 | `v-profiles` | 列出预设 |
+                **⚡ 进程管理**
 
-                **关键词过滤**
-                | 命令 | 说明 | 命令 | 说明 |
-                |------|------|------|------|
-                | `v-block <词>` | 添加过滤 | `v-unblock <词>` | 移除过滤 |
+                | 命令 | 说明 |
+                |------|------|
+                | `v-proc <序号>` | 切换到指定进程（同时切换会话和工作目录） |
+                | `v-fork` | 克隆当前进程，共享 session 和工作目录 |
+                | `v-newproc [session序号]` | 创建新独立进程，可选绑定 session |
+                | `v-delproc <序号>` | 删除指定进程（需先删除子进程） |
+                | `v-stop` | 停止当前进程的任务 |
+                | `v-stop <序号>` | 停止指定进程的任务 |
+                | `v-stop all` | 停止全部进程的任务 |
+                | `v-maxproc <数量>` | 设置最大进程数 (1-CPU×2) |
+                | `v-idle <秒>` | 设置空闲超时（默认24小时） |
 
-                **进程管理**
-                | 命令 | 说明 | 命令 | 说明 |
-                |------|------|------|------|
-                | `v-processes` | 查看进程状态 | `v-maxproc <数量>` | 设置最大进程数(1-10) |
-                | `v-idle <秒>` | 设置空闲超时 | `v-prefer new/queue` | 排队策略 |
-                | `v-stop` | 强制停止所有任务 | | |
+                ---
 
-                **注意事项**
-                服务重启后，内存中的进程池和会话记录会清空，首次发消息将自动创建新进程。
-                异常关闭导致的孤儿进程会在服务启动时自动清理。
-                Claude 的磁盘会话（~/.claude/sessions）仍保留，可通过 `v-resume <id>` 恢复。
+                **🔗 进程克隆说明**
+
+                • `v-fork` 克隆当前进程作为子进程，共享 session 和工作目录
+                • 如果当前是子进程，克隆的进程会放在父进程下（不传递子进程）
+                • `v-newproc` 创建的是独立进程，不在任何进程组，不共享任务
+                • 进程组内可并行处理消息，全部忙碌时排队等待
+                • 父进程的 session 和工作目录变更会同步到子进程
+                • 进程空闲超时后自动销毁（默认24小时）
+                • 每个忙碌进程占用一条消息配额
+
+                ---
+
+                **⚙️ Claude 配置**
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-config <key> <url> <model>` | 一键配置 API Key、地址、模型 |
+                | `v-switch <name>` | 切换预设配置 |
+                | `v-model <name>` | 设置模型名称 |
+                | `v-api <url>` | 设置 API 地址 |
+                | `v-key <key>` | 设置 API Key |
+                | `v-claude <path>` | 设置 Claude 安装路径 |
+                | `v-cd <path> [clear] [force]` | 切换工作目录 |
+                | `v-thinking <级别>` | 设置推理模式 |
+
+                ---
+
+                **🧠 推理模式** (`v-thinking`)
+
+                | 级别 | 说明 |
+                |------|------|
+                | `off` | 关闭推理 |
+                | `low` | 1k tokens |
+                | `medium` | 5k tokens |
+                | `high` | 10k tokens |
+                | `max` | 32k tokens |
+                | `default` | 查看当前配置 |
+
+                ---
+
+                **💬 会话管理**
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-sessions` | 列出所有会话 |
+                | `v-session <序号或ID>` | 切换到指定会话 |
+                | `v-new` / `v-clear` | 新建/清空会话（销毁进程） |
+                | `v-delete <id>` | 删除指定会话 |
+                | `v-disk-sessions` | 查看磁盘保存的会话 |
+                | `v-save <name>` | 保存当前配置为预设 |
+                | `v-profiles` | 列出所有预设 |
+
+                ---
+
+                **🔔 通知配置**
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-notify <true/false>` | 消息状态通知 |
+                | `v-tools <true/false>` | 工具调用通知 |
+                | `v-fileread <true/false>` | 文件读取通知 |
+                | `v-fileedit <true/false>` | 文件编辑通知 |
+                | `v-subtask <true/false>` | 子任务状态通知 |
+                | `v-subtask-done <true/false>` | 子任务完成通知 |
+                | `v-token` | 查看/开关 Token 统计 |
+
+                ---
+
+                **🔍 关键词过滤**
+
+                | 命令 | 说明 |
+                |------|------|
+                | `v-block <词>` | 添加关键词过滤 |
+                | `v-unblock <词>` | 移除关键词过滤 |
+
+                ---
+
+                **📌 注意事项**
+
+                • 服务重启后，内存中的进程池和会话记录会清空
+                • 异常关闭导致的孤儿进程会在服务启动时自动清理
+                • 消息配额为 10 条/24h，每个忙碌进程占用一条配额
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
@@ -468,37 +595,43 @@ public class MessageRouter {
         ClaudeApiService.TokenUsage usage = claudeApiService.getTokenUsage(userId);
         String activeProfile = configService.getActiveProfile();
         int processCount = claudeApiService.getProcessCount(userId);
+        int forkCount = claudeApiService.getForkChildCount(userId);
         int busyCount = claudeApiService.getBusyProcessCount(userId);
         String quotaStatus = quotaManager.getStatus(userId);
 
         String status = String.format("""
-                **VibeWeChat 系统状态**
+                **📊 VibeWeChat 系统状态**
 
-                | 项目 | 值 | 项目 | 值 |
-                |------|-----|------|-----|
-                | API | `%s` | 模型 | `%s` |
-                | 路径 | `%s` | 推理模式 | %s |
-                | 活跃配置 | `%s` | 工作目录 | `%s` |
+                ---
 
-                **进程管理**
+                **⚙️ Claude 配置**
 
-                | 项目 | 值 | 项目 | 值 |
-                |------|-----|------|-----|
-                | 进程数 | %d/%d (忙碌%d) | 空闲超时 | %s |
-                | 排队策略 | %s | 配额 | %s |
+                | API 地址 | 模型 | 安装路径 | 推理模式 | 活跃配置 | 工作目录 |
+                |----------|------|----------|----------|----------|----------|
+                | `%s` | `%s` | `%s` | %s | `%s` | `%s` |
 
-                **会话信息**
+                ---
 
-                | 项目 | 值 | 项目 | 值 |
-                |------|-----|------|-----|
-                | 会话ID | `%s` | 历史会话 | %d 个 |
-                | Token输入 | %s | Token输出 | %s |
-                | Token总计 | %s | 关键词过滤 | %d 个 |
+                **⚡ 进程状态**
 
-                **通知配置** (`v-filter` 修改)
+                | 进程总数 | fork 子进程 | 忙碌进程 | 空闲超时 | 配额 |
+                |----------|-------------|----------|----------|------|
+                | %d/%d | %d | %d | %s | %s |
 
-                | 消息状态 | 工具调用 | 文件读取 | 文件编辑 | 子任务 | 子任务完成 | 任务完成 | Token统计 |
-                |----------|----------|----------|----------|--------|------------|----------|-----------|
+                ---
+
+                **💬 会话信息**
+
+                | 当前会话 | 历史会话 | Token 输入 | Token 输出 | Token 总计 | 关键词过滤 |
+                |----------|----------|------------|------------|------------|------------|
+                | `%s` | %d 个 | %s | %s | %s | %d 个 |
+
+                ---
+
+                **🔔 通知配置**
+
+                | 消息状态 | 工具调用 | 文件读取 | 文件编辑 | 子任务状态 | 子任务完成 | 任务完成 | Token 统计 |
+                |----------|----------|----------|----------|------------|------------|----------|------------|
                 | %s | %s | %s | %s | %s | %s | %s | %s |
                 """,
                 claudeApiService.getApiUrl() != null ? claudeApiService.getApiUrl() : "未设置",
@@ -509,11 +642,11 @@ public class MessageRouter {
                 claudeConfig().getWorkDir() != null && !claudeConfig().getWorkDir().isEmpty() ? claudeConfig().getWorkDir() : System.getProperty("user.dir"),
                 processCount,
                 claudeApiService.getMaxProcessesPerUser(),
+                forkCount,
                 busyCount,
                 formatDuration(claudeApiService.getProcessIdleTimeoutMs()),
-                claudeApiService.isPreferNewProcess() ? "新进程优先" : "排队优先",
                 quotaStatus,
-                sessionId != null ? sessionId : "无",
+                sessionId != null ? sessionId.substring(0, Math.min(12, sessionId.length())) + "..." : "无",
                 sessionCount,
                 formatTokens(usage.getInputTokens()),
                 formatTokens(usage.getOutputTokens()),
@@ -584,10 +717,31 @@ public class MessageRouter {
     }
 
     private void handleSessionCommand(String userId, String[] parts, String contextToken) {
-        if (parts.length >= 2 && claudeApiService.switchSession(userId, parts[1])) {
-            ilinkService.sendText(userId, "已切换: " + parts[1] + "\n新请求将恢复此会话", contextToken);
-        } else {
-            ilinkService.sendText(userId, "用法: v-session <id>\n使用 v-sessions 查看", contextToken);
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-session <序号或ID>\n使用 v-sessions 查看", contextToken);
+            return;
+        }
+
+        String target = parts[1];
+        // 尝试按序号匹配
+        try {
+            int index = Integer.parseInt(target) - 1;
+            java.util.List<String> history = claudeApiService.getSessionHistory(userId);
+            if (index >= 0 && index < history.size()) {
+                String sessionId = history.get(index);
+                if (claudeApiService.switchSession(userId, sessionId)) {
+                    ilinkService.sendText(userId, "已切换到会话#" + target + ": `" + sessionId.substring(0, Math.min(12, sessionId.length())) + "...`\n新请求将恢复此会话", contextToken);
+                    return;
+                }
+            }
+            ilinkService.sendText(userId, "无效序号，范围: 1-" + history.size() + "\n使用 v-sessions 查看", contextToken);
+        } catch (NumberFormatException e) {
+            // 不是数字，作为 sessionId 使用
+            if (claudeApiService.switchSession(userId, target)) {
+                ilinkService.sendText(userId, "已切换: " + target + "\n新请求将恢复此会话", contextToken);
+            } else {
+                ilinkService.sendText(userId, "未找到会话: " + target + "\n使用 v-sessions 查看", contextToken);
+            }
         }
     }
 
@@ -686,21 +840,22 @@ public class MessageRouter {
     }
 
     private void handleMaxProcCommand(String userId, String[] parts, String contextToken) {
+        int maxAllowed = Runtime.getRuntime().availableProcessors() * 2;
         if (parts.length >= 2) {
             try {
                 int maxProc = Integer.parseInt(parts[1]);
-                if (maxProc < 1 || maxProc > 10) {
-                    ilinkService.sendText(userId, "无效值，范围: 1-10", contextToken);
+                if (maxProc < 1 || maxProc > maxAllowed) {
+                    ilinkService.sendText(userId, "无效值，范围: 1-" + maxAllowed + "（CPU核心数×2）", contextToken);
                     return;
                 }
                 claudeApiService.setMaxProcessesPerUser(maxProc);
                 configService.saveConfig();
                 ilinkService.sendText(userId, "最大进程数: " + maxProc + "\n超出的空闲进程将在下次清理时销毁", contextToken);
             } catch (NumberFormatException e) {
-                ilinkService.sendText(userId, "用法: v-maxproc <数量>\n当前: " + claudeApiService.getMaxProcessesPerUser(), contextToken);
+                ilinkService.sendText(userId, "用法: v-maxproc <数量>\n当前: " + claudeApiService.getMaxProcessesPerUser() + "\n范围: 1-" + maxAllowed, contextToken);
             }
         } else {
-            ilinkService.sendText(userId, "用法: v-maxproc <数量>\n当前: " + claudeApiService.getMaxProcessesPerUser(), contextToken);
+            ilinkService.sendText(userId, "用法: v-maxproc <数量>\n当前: " + claudeApiService.getMaxProcessesPerUser() + "\n范围: 1-" + maxAllowed, contextToken);
         }
     }
 
@@ -729,33 +884,108 @@ public class MessageRouter {
         }
     }
 
-    private void handlePreferCommand(String userId, String[] parts, String contextToken) {
+    private void handleStopCommand(String userId, String[] parts, String contextToken) {
+        // v-stop [all|序号]
+        // 默认停止当前进程的任务
+        // all: 停止全部任务
+        // 序号: 停止指定进程的任务
+
         if (parts.length >= 2) {
-            String value = parts[1].toLowerCase();
-            if ("new".equals(value) || "true".equals(value) || "1".equals(value)) {
-                claudeApiService.setPreferNewProcess(true);
-                configService.saveConfig();
-                ilinkService.sendText(userId, "排队策略: 优先创建新进程\n进程未满时自动创建新进程（自动加载上下文）", contextToken);
-            } else if ("queue".equals(value) || "false".equals(value) || "0".equals(value)) {
-                claudeApiService.setPreferNewProcess(false);
-                configService.saveConfig();
-                ilinkService.sendText(userId, "排队策略: 优先排队等待\n进程未满时排队等待空闲进程", contextToken);
+            String arg = parts[1].toLowerCase();
+            if ("all".equals(arg)) {
+                // 停止全部任务
+                int busyCount = claudeApiService.getBusyProcessCount(userId);
+                if (busyCount == 0) {
+                    ilinkService.sendText(userId, "当前没有正在运行的任务", contextToken);
+                    return;
+                }
+                claudeApiService.forceStopAll(userId);
+                ilinkService.sendText(userId, "已强制停止全部 " + busyCount + " 个忙碌进程", contextToken);
             } else {
-                ilinkService.sendText(userId, "用法: v-prefer <new|queue>\n当前: " + (claudeApiService.isPreferNewProcess() ? "new (优先新进程)" : "queue (优先排队)"), contextToken);
+                // 停止指定进程的任务
+                try {
+                    int index = Integer.parseInt(parts[1]) - 1;
+                    String result = claudeApiService.forceStopProcess(userId, index);
+                    ilinkService.sendText(userId, result, contextToken);
+                } catch (NumberFormatException e) {
+                    ilinkService.sendText(userId, "用法: v-stop [all|序号]\n- 无参数: 停止当前进程\n- all: 停止全部\n- 序号: 停止指定进程", contextToken);
+                }
             }
         } else {
-            ilinkService.sendText(userId, "用法: v-prefer <new|queue>\n当前: " + (claudeApiService.isPreferNewProcess() ? "new (优先新进程)" : "queue (优先排队)"), contextToken);
+            // 默认停止当前进程的任务
+            int busyCount = claudeApiService.getBusyProcessCount(userId);
+            if (busyCount == 0) {
+                ilinkService.sendText(userId, "当前没有正在运行的任务", contextToken);
+                return;
+            }
+            // 停止当前进程（第一个父进程）
+            String result = claudeApiService.forceStopCurrentProcess(userId);
+            ilinkService.sendText(userId, result, contextToken);
         }
     }
 
-    private void handleStopCommand(String userId, String contextToken) {
-        int busyCount = claudeApiService.getBusyProcessCount(userId);
-        if (busyCount == 0) {
-            ilinkService.sendText(userId, "当前没有正在运行的任务", contextToken);
+    private void handleProcCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-proc <序号>\n使用 v-processes 查看进程列表", contextToken);
             return;
         }
-        claudeApiService.forceStopAll(userId);
-        ilinkService.sendText(userId, "已强制停止 " + busyCount + " 个忙碌进程", contextToken);
+
+        try {
+            int index = Integer.parseInt(parts[1]) - 1;
+            String result = claudeApiService.switchProcess(userId, index);
+            ilinkService.sendText(userId, result, contextToken);
+        } catch (NumberFormatException e) {
+            ilinkService.sendText(userId, "用法: v-proc <序号>\n使用 v-processes 查看进程列表", contextToken);
+        }
+    }
+
+    private void handleForkCommand(String userId, String[] parts, String contextToken) {
+        // v-fork: 克隆当前进程作为子进程
+        // 如果当前是子进程，则克隆到父进程下
+        String result = claudeApiService.cloneCurrentProcess(userId);
+        ilinkService.sendText(userId, result, contextToken);
+    }
+
+    private void handleNewProcCommand(String userId, String[] parts, String contextToken) {
+        // v-newproc [session序号或ID]: 创建新独立进程（非克隆），可选绑定 session
+        String sessionId = null;
+
+        if (parts.length >= 2) {
+            String target = parts[1];
+            // 尝试按序号匹配
+            try {
+                int index = Integer.parseInt(target) - 1;
+                java.util.List<String> history = claudeApiService.getSessionHistory(userId);
+                if (index >= 0 && index < history.size()) {
+                    sessionId = history.get(index);
+                } else {
+                    ilinkService.sendText(userId, "无效序号，范围: 1-" + history.size() + "\n使用 v-sessions 查看", contextToken);
+                    return;
+                }
+            } catch (NumberFormatException e) {
+                // 不是数字，作为 sessionId 使用
+                sessionId = target;
+            }
+        }
+
+        String result = claudeApiService.createNewProcess(userId, sessionId);
+        ilinkService.sendText(userId, result, contextToken);
+    }
+
+    private void handleDelProcCommand(String userId, String[] parts, String contextToken) {
+        // v-delproc <序号>: 删除指定进程（有子进程时不可删除）
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-delproc <序号>\n使用 v-processes 查看进程列表", contextToken);
+            return;
+        }
+
+        try {
+            int index = Integer.parseInt(parts[1]) - 1;
+            String result = claudeApiService.deleteProcess(userId, index);
+            ilinkService.sendText(userId, result, contextToken);
+        } catch (NumberFormatException e) {
+            ilinkService.sendText(userId, "用法: v-delproc <序号>\n使用 v-processes 查看进程列表", contextToken);
+        }
     }
 
     private void handleConfigCommand(String userId, String[] parts, String contextToken) {

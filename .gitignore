@@ -32,3 +32,6 @@ application-local.yml
 vibe-wechat-config.json
 *.config.json
 *.pid
+
+# Session persistence
+.vibe-wechat/

@@ -20,7 +20,8 @@ public class QuotaManager {
         int runningProcesses = 0;
 
         synchronized int getAvailable() {
-            return MESSAGE_LIMIT - totalUsed - reservedForResult;
+            // 可用配额 = 10 - 已用 - 运行中的进程（每个忙碌进程占用一条配额）
+            return MESSAGE_LIMIT - totalUsed - runningProcesses;
         }
     }
 
@@ -47,6 +48,24 @@ public class QuotaManager {
         if (q == null) return true;
         synchronized (q) {
             return q.getAvailable() > 0;
+        }
+    }
+
+    /**
+     * 决策消息始终可以发送（不受配额限制）
+     */
+    public boolean canSendDecisionMessage(String userId) {
+        return true;
+    }
+
+    /**
+     * 获取预留配额数量（运行中的进程占用的配额）
+     */
+    public int getReservedQuota(String userId) {
+        QuotaState q = quotas.get(userId);
+        if (q == null) return 0;
+        synchronized (q) {
+            return q.runningProcesses;
         }
     }
 
@@ -86,10 +105,9 @@ public class QuotaManager {
         QuotaState q = quotas.get(userId);
         if (q == null) return "无数据";
         synchronized (q) {
-            // 可用配额需要考虑 status 消息也占用一条
             int available = q.getAvailable();
-            return String.format("已用:%d, 预留:%d, 运行中:%d, 可用:%d",
-                    q.totalUsed, q.reservedForResult, q.runningProcesses, available);
+            return String.format("已用:%d, 预留:%d, 可用:%d (共10条)",
+                    q.totalUsed, q.runningProcesses, available);
         }
     }
 }
