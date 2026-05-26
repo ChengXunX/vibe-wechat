@@ -431,6 +431,7 @@ public class MessageRouter {
             case V_DELETE -> handleDeleteSessionCommand(userId, parts, contextToken);
             case V_PROCESSES -> handleProcessStatus(userId, contextToken);
             case V_MAXPROC -> handleMaxProcCommand(userId, parts, contextToken);
+            case V_IDLE -> handleIdleTimeoutCommand(userId, parts, contextToken);
             case V_STOP -> handleStopCommand(userId, parts, contextToken);
             case V_PROC -> handleProcCommand(userId, parts, contextToken);
             case V_FORK -> handleForkCommand(userId, parts, contextToken);
