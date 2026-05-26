@@ -59,13 +59,13 @@ public class QuotaManager {
     }
 
     /**
-     * 获取预留配额数量（运行中的进程占用的配额）
+     * 获取预留配额数量（等待结果的进程占用的配额）
      */
     public int getReservedQuota(String userId) {
         QuotaState q = quotas.get(userId);
         if (q == null) return 0;
         synchronized (q) {
-            return q.runningProcesses;
+            return q.reservedForResult;
         }
     }
 
@@ -107,7 +107,7 @@ public class QuotaManager {
         synchronized (q) {
             int available = q.getAvailable();
             return String.format("已用:%d, 预留:%d, 可用:%d (共10条)",
-                    q.totalUsed, q.runningProcesses, available);
+                    q.totalUsed, q.reservedForResult, available);
         }
     }
 }

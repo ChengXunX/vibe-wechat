@@ -172,7 +172,7 @@ public class IlInkConnectionHandler {
             return;
         }
 
-        // 计算预留配额：当前消息数 + 运行中的进程数 >= 10 时追加警告
+        // 计算预留配额：当前消息数 + 等待结果的进程数 >= 10 时追加警告
         int reservedQuota = quotaManager.getReservedQuota(userId);
         String finalText = text;
         if (!isUnlimitedType && (currentCount + reservedQuota) >= MESSAGE_LIMIT - 1) {
