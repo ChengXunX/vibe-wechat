@@ -48,11 +48,17 @@ jobs:
             ${{ matrix.type == 'pkg' && '--mac-package-identifier com.chengxun.vibewechat' || '' }} \
             ${{ matrix.type == 'deb' && '--linux-package-name vibe-wechat' || '' }}
 
+      - name: List generated files
+        run: ls -la
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: vibe-wechat-${{ runner.os }}
-          path: VibeWeChat*
+          path: |
+            VibeWeChat*
+            vibe-wechat*.deb
+            *.rpm
           if-no-files-found: error
 
   release:
