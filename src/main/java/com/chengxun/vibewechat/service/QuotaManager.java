@@ -78,30 +78,6 @@ public class QuotaManager {
         }
     }
 
-    public int getRunningProcesses(String userId) {
-        QuotaState q = quotas.get(userId);
-        if (q == null) return 0;
-        synchronized (q) {
-            return q.runningProcesses;
-        }
-    }
-
-    public int getTotalUsed(String userId) {
-        QuotaState q = quotas.get(userId);
-        if (q == null) return 0;
-        synchronized (q) {
-            return q.totalUsed;
-        }
-    }
-
-    public int getAvailable(String userId) {
-        QuotaState q = quotas.get(userId);
-        if (q == null) return MESSAGE_LIMIT;
-        synchronized (q) {
-            return q.getAvailable();
-        }
-    }
-
     public void reset(String userId) {
         quotas.remove(userId);
     }

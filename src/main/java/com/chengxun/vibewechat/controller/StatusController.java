@@ -115,7 +115,7 @@ public class StatusController {
                    "}" +
                    "window.onload=function(){timerId=setInterval(timer,1000);};" +
                    "</script></head>" +
-                   "<body><h1>Vibe We Chat</h1><p>扫描二维码连接微信 ilink</p>" +
+                   "<body><h1>VibeWeChat</h1><p>扫描二维码连接微信 ilink</p>" +
                    "<img src=\"data:image/png;base64," + qrBase64 + "\" alt=\"QR Code\">" +
                    "<p>服务状态: <span id=\"status\">" + status + "</span></p>" +
                    "<p>QR Code Token: " + qrcode + "</p>" +

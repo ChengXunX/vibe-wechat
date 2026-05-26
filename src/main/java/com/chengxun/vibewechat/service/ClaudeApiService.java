@@ -35,12 +35,11 @@ public class ClaudeApiService {
     @Autowired
     private QuotaManager quotaManager;
 
-    // 会话管理（保留原有逻辑）
+    // 会话管理
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
     private final Map<String, String> subtaskNames = new ConcurrentHashMap<>();
-    private final Map<String, Long> lastDurationMsMap = new ConcurrentHashMap<>();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     // 常驻进程池
@@ -65,6 +64,12 @@ public class ClaudeApiService {
         cleanupScheduler.scheduleAtFixedRate(this::cleanupIdleProcesses, 60, 60, TimeUnit.SECONDS);
     }
 
+    /**
+     * 服务关闭时销毁所有 Claude 子进程。
+     * 正常关闭：进程池清空，所有子进程被 destroyForcibly 终止。
+     * 异常关闭（kill -9）：Java 进程被杀，子进程可能成为孤儿进程。
+     * 重启后：进程池为空，会话历史丢失，但 ~/.claude/sessions 仍保留磁盘会话。
+     */
     @PreDestroy
     public void destroy() {
         if (cleanupScheduler != null) {
@@ -134,9 +139,13 @@ public class ClaudeApiService {
             return null; // 需要排队
         }
 
+        // 进程池为空时必须创建进程，否则队列中的消息将永远无法被处理
+        if (pool.isEmpty()) {
+            return startNewProcess(userId, pool);
+        }
+
         // 根据配置决定：优先创建新进程还是排队
         if (claudeConfig.isPreferNewProcess()) {
-            // 优先创建新进程（自动加载上下文）
             return startNewProcess(userId, pool);
         } else {
             // 优先排队等待空闲进程
@@ -215,10 +224,11 @@ public class ClaudeApiService {
                 try {
                     String line;
                     while ((line = cp.stderr.readLine()) != null) {
-                        log.debug("Claude stderr: {}", line);
+                        log.info("Claude stderr for user {}: {}", userId, line);
                     }
+                    log.info("Claude stderr stream closed for user: {}", userId);
                 } catch (Exception e) {
-                    // ignore
+                    log.debug("Claude stderr reader error for user {}: {}", userId, e.getMessage());
                 }
             });
             stderrThread.setDaemon(true);
@@ -281,14 +291,18 @@ public class ClaudeApiService {
             // 通过 stdin 发送消息
             String jsonMessage = objectMapper.writeValueAsString(
                     Map.of("type", "user_message", "content", message));
+            log.info("Sending message to Claude stdin for user {}: {}", userId, jsonMessage.length() > 200 ? jsonMessage.substring(0, 200) + "..." : jsonMessage);
             cp.stdin.write((jsonMessage + "\n").getBytes());
             cp.stdin.flush();
+            log.info("Message flushed to Claude stdin for user: {}", userId);
 
             // 读取响应
             StringBuilder output = new StringBuilder();
             String line;
+            log.info("Waiting for Claude response on stdout for user: {}", userId);
             while ((line = cp.stdout.readLine()) != null) {
                 if (line.isEmpty()) continue;
+                log.debug("Claude stdout line for user {}: {}", userId, line.length() > 200 ? line.substring(0, 200) + "..." : line);
 
                 try {
                     com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
@@ -351,7 +365,6 @@ public class ClaudeApiService {
             }
 
             long duration = System.currentTimeMillis() - startTime;
-            lastDurationMsMap.put(userId, duration);
 
             String result = output.toString().trim();
             log.info("Claude process responded in {}ms for user: {}", duration, userId);
@@ -394,21 +407,6 @@ public class ClaudeApiService {
 
     public void destroyAllProcesses(String userId) {
         destroyProcess(userId);
-    }
-
-    public void destroyAllProcessesForce(String userId) {
-        List<ClaudeProcess> pool = processPools.remove(userId);
-        if (pool != null) {
-            pool.forEach(ClaudeProcess::destroy);
-        }
-        requestQueues.remove(userId);
-    }
-
-    public void destroyProcessByIndex(String userId, int index) {
-        List<ClaudeProcess> pool = processPools.get(userId);
-        if (pool != null && index >= 0 && index < pool.size()) {
-            pool.remove(index).destroy();
-        }
     }
 
     public int getProcessCount(String userId) {
@@ -467,6 +465,9 @@ public class ClaudeApiService {
         long now = System.currentTimeMillis();
         long timeout = claudeConfig.getProcessIdleTimeoutMs();
 
+        // 收集需要移除的空 userId
+        java.util.List<String> emptyPools = new ArrayList<>();
+
         processPools.forEach((userId, pool) -> {
             // 先清理空闲超时的进程
             pool.removeIf(p -> {
@@ -501,11 +502,16 @@ public class ClaudeApiService {
                 }
             }
 
-            // 如果池空了，移除
+            // 如果池空了，标记移除
             if (pool.isEmpty()) {
-                processPools.remove(userId);
+                emptyPools.add(userId);
             }
         });
+
+        // 统一移除空池
+        for (String userId : emptyPools) {
+            processPools.remove(userId);
+        }
     }
 
     // ==================== 工具调用回调 ====================
@@ -720,17 +726,13 @@ public class ClaudeApiService {
                 formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens));
     }
 
-    public long getLastDurationMs(String userId) {
-        return lastDurationMsMap.getOrDefault(userId, 0L);
-    }
-
     public String getTaskCompletionSummary(String userId, long durationMs) {
         TokenUsage usage = getTokenUsage(userId);
         String duration = formatDuration(durationMs);
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
-        int contextPercent = contextWindow > 0 ? (int) (usage.inputTokens * 100.0 / contextWindow) : 0;
+        int contextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
         return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s",
                 formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo);

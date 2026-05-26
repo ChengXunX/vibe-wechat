@@ -95,6 +95,7 @@ public class MessageRouter {
     public void handleIlInkMessage(IlInkService.IlInkMessageEvent event) {
         userContextTokens.put(event.getUserId(), event.getContextToken());
         ilinkService.resetMessageCount(event.getUserId());
+        quotaManager.reset(event.getUserId());
         handleMessage(event.getUserId(), event.getContent(), event.getContextToken(), event.isNewUser());
     }
 
@@ -195,9 +196,10 @@ public class MessageRouter {
             if (workDir == null || workDir.isEmpty()) workDir = System.getProperty("user.dir");
             String sessionDisplay = sessionId != null ? sessionId : "新会话";
             int processCount = claudeApiService.getProcessCount(userId);
+            String processHint = processCount == 0 ? "\n⚡ 首次使用，正在初始化 Claude 进程..." : "";
             String statusMsg = String.format(
-                "✅ 收到消息，开始处理...\n\n📋 会话ID: `%s`\n🤖 模型: `%s`\n📁 工作目录: `%s`\n⚙️ 进程数: %d",
-                sessionDisplay, model, workDir, processCount
+                "✅ 收到消息，开始处理...\n\n📋 会话ID: `%s`\n🤖 模型: `%s`\n📁 工作目录: `%s`\n⚙️ 进程数: %d%s",
+                sessionDisplay, model, workDir, processCount, processHint
             );
             ilinkService.sendText(userId, statusMsg, contextToken, "result");
             quotaManager.recordMessageSent(userId, "result");
@@ -348,6 +350,7 @@ public class MessageRouter {
             case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); configService.saveConfig(); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }
             case V_UNBLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().remove(kw); configService.saveConfig(); ilinkService.sendText(userId, "已移除: " + kw, contextToken); } }
             case V_NOTIFY -> { if (parts.length > 1) { filterConfig.setShowMessageStatus(Boolean.parseBoolean(parts[1])); configService.saveConfig(); ilinkService.sendText(userId, "通知: " + (filterConfig.isShowMessageStatus() ? "开启" : "关闭"), contextToken); } }
+            case V_CONFIG -> handleConfigCommand(userId, parts, contextToken);
             case V_SWITCH -> handleSwitchCommand(userId, parts, contextToken);
             case V_SAVE -> handleSaveCommand(userId, parts, contextToken);
             case V_PROFILES -> handleProfilesCommand(userId, contextToken);
@@ -444,6 +447,11 @@ public class MessageRouter {
                 |------|------|------|------|
                 | `v-processes` | 查看进程状态 | `v-maxproc <数量>` | 设置最大进程数(1-10) |
                 | `v-idle <秒>` | 设置空闲超时 | `v-prefer new/queue` | 排队策略 |
+                | `v-stop` | 强制停止所有任务 | | |
+
+                **注意事项**
+                服务重启后，内存中的进程池和会话记录会清空，首次发消息将自动创建新进程。
+                Claude 的磁盘会话（~/.claude/sessions）仍保留，可通过 `v-session <id>` 恢复。
                 """;
         ilinkService.sendText(userId, help, contextToken);
     }
@@ -454,77 +462,57 @@ public class MessageRouter {
         ClaudeApiService.TokenUsage usage = claudeApiService.getTokenUsage(userId);
         String activeProfile = configService.getActiveProfile();
         int processCount = claudeApiService.getProcessCount(userId);
+        int busyCount = claudeApiService.getBusyProcessCount(userId);
         String quotaStatus = quotaManager.getStatus(userId);
 
         String status = String.format("""
                 **VibeWeChat 系统状态**
 
-                | 配置项 | 值 |
-                |--------|-----|
-                | API | `%s` |
-                | 模型 | `%s` |
-                | 路径 | `%s` |
-                | 推理模式 | %s |
-                | 活跃配置 | `%s` |
+                | 项目 | 值 | 项目 | 值 |
+                |------|-----|------|-----|
+                | API | `%s` | 模型 | `%s` |
+                | 路径 | `%s` | 推理模式 | %s |
+                | 活跃配置 | `%s` | 工作目录 | `%s` |
 
-                **当前会话**
+                **进程管理**
 
-                | 项目 | 值 |
-                |------|-----|
-                | 会话ID | `%s` |
-                | 历史会话 | %d 个 |
-                | 工作目录 | `%s` |
+                | 项目 | 值 | 项目 | 值 |
+                |------|-----|------|-----|
+                | 进程数 | %d/%d (忙碌%d) | 空闲超时 | %s |
+                | 排队策略 | %s | 配额 | %s |
 
-                **进程配置**
+                **会话信息**
 
-                | 项目 | 值 |
-                |------|-----|
-                | 进程数 | %d / %d |
-                | 空闲超时 | %s |
-                | 排队策略 | %s |
-                | 配额 | %s |
+                | 项目 | 值 | 项目 | 值 |
+                |------|-----|------|-----|
+                | 会话ID | `%s` | 历史会话 | %d 个 |
+                | Token输入 | %s | Token输出 | %s |
+                | Token总计 | %s | 关键词过滤 | %d 个 |
 
-                **Token 用量**
+                **通知配置** (`v-filter` 修改)
 
-                | 输入 | 输出 | 总计 |
-                |------|------|------|
-                | %s | %s | %s |
-
-                **通知配置** (使用 `v-filter` 修改)
-
-                | 通知项 | 状态 | 说明 |
-                |--------|------|------|
-                | 消息状态 | %s | 收到消息时提示 |
-                | 工具调用 | %s | 显示工具调用详情 |
-                | 文件读取 | %s | 显示文件读取操作 |
-                | 文件编辑 | %s | 显示文件编辑操作 |
-                | 子任务状态 | %s | 子任务创建/更新通知 |
-                | 子任务完成 | %s | 子任务完成通知 |
-                | 任务完成 | %s | 任务完成摘要 |
-                | Token统计 | %s | 显示Token消耗 |
-
-                **其他**
-
-                | 项目 | 值 |
-                |------|-----|
-                | 关键词过滤 | %d 个 |
+                | 消息状态 | 工具调用 | 文件读取 | 文件编辑 | 子任务 | 子任务完成 | 任务完成 | Token统计 |
+                |----------|----------|----------|----------|--------|------------|----------|-----------|
+                | %s | %s | %s | %s | %s | %s | %s | %s |
                 """,
                 claudeApiService.getApiUrl() != null ? claudeApiService.getApiUrl() : "未设置",
                 claudeApiService.getModel() != null ? claudeApiService.getModel() : "未设置",
                 claudeApiService.getInstallPath() != null ? claudeApiService.getInstallPath() : "自动检测",
-                claudeApiService.isThinkingEnabled() ? thinkingConfig.getLevel() + " (" + thinkingConfig.getCurrentBudgetTokens() + " tokens)" : "❌ 关闭",
+                claudeApiService.isThinkingEnabled() ? thinkingConfig.getLevel() + " (" + thinkingConfig.getCurrentBudgetTokens() + " tok)" : "关闭",
                 activeProfile != null && !activeProfile.isEmpty() ? activeProfile : "无",
-                sessionId != null ? sessionId : "无",
-                sessionCount,
                 claudeConfig().getWorkDir() != null && !claudeConfig().getWorkDir().isEmpty() ? claudeConfig().getWorkDir() : System.getProperty("user.dir"),
                 processCount,
                 claudeApiService.getMaxProcessesPerUser(),
+                busyCount,
                 formatDuration(claudeApiService.getProcessIdleTimeoutMs()),
-                claudeApiService.isPreferNewProcess() ? "优先新进程" : "优先排队",
+                claudeApiService.isPreferNewProcess() ? "新进程优先" : "排队优先",
                 quotaStatus,
+                sessionId != null ? sessionId : "无",
+                sessionCount,
                 formatTokens(usage.getInputTokens()),
                 formatTokens(usage.getOutputTokens()),
                 formatTokens(usage.getTotalTokens()),
+                filterConfig.getBlockedKeywords().size(),
                 filterConfig.isShowMessageStatus() ? "✅" : "❌",
                 filterConfig.isShowToolCalls() ? "✅" : "❌",
                 filterConfig.isShowFileRead() ? "✅" : "❌",
@@ -532,8 +520,7 @@ public class MessageRouter {
                 filterConfig.isShowSubtaskStatus() ? "✅" : "❌",
                 filterConfig.isShowSubtaskCompletion() ? "✅" : "❌",
                 filterConfig.isShowTaskCompletion() ? "✅" : "❌",
-                filterConfig.isShowTokenUsage() ? "✅" : "❌",
-                filterConfig.getBlockedKeywords().size());
+                filterConfig.isShowTokenUsage() ? "✅" : "❌");
         ilinkService.sendText(userId, status, contextToken);
     }
 
@@ -763,6 +750,28 @@ public class MessageRouter {
         }
         claudeApiService.forceStopAll(userId);
         ilinkService.sendText(userId, "已强制停止 " + busyCount + " 个忙碌进程", contextToken);
+    }
+
+    private void handleConfigCommand(String userId, String[] parts, String contextToken) {
+        if (parts.length < 4) {
+            ilinkService.sendText(userId, "用法: v-config <key> <url> <model>\n\n示例:\nv-config sk-xxx https://api.anthropic.com claude-sonnet-4-20250514", contextToken);
+            return;
+        }
+        String apiKey = parts[1];
+        String apiUrl = parts[2];
+        String model = parts[3];
+
+        claudeApiService.setApiKey(apiKey);
+        claudeApiService.setApiUrl(apiUrl);
+        claudeApiService.setModel(model);
+        configService.saveConfig();
+
+        if (claudeApiService.hasBusyProcesses(userId)) {
+            ilinkService.sendText(userId, "✅ 一键配置完成\n\n🔑 API Key: " + apiKey.substring(0, Math.min(8, apiKey.length())) + "...\n🌐 API: " + apiUrl + "\n🤖 模型: " + model + "\n\n⚠️ 有任务运行中，配置已保存，新进程将使用此配置", contextToken);
+        } else {
+            claudeApiService.destroyAllProcesses(userId);
+            ilinkService.sendText(userId, "✅ 一键配置完成\n\n🔑 API Key: " + apiKey.substring(0, Math.min(8, apiKey.length())) + "...\n🌐 API: " + apiUrl + "\n🤖 模型: " + model + "\n\n进程已重启\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
+        }
     }
 
     private com.chengxun.vibewechat.config.ClaudeConfig claudeConfig() {
