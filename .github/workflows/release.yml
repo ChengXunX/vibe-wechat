@@ -36,6 +36,7 @@ jobs:
         run: mvn clean package -DskipTests
 
       - name: Build native package
+        shell: bash
         run: |
           jpackage --input target \
             --main-jar vibe-wechat-1.0-SNAPSHOT.jar \
