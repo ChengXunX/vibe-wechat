@@ -794,6 +794,9 @@ public class ClaudeApiService {
             return "克隆进程失败";
         }
 
+        // 尝试处理排队的消息
+        processNextInQueue(userId);
+
         return String.format("✅ 已克隆进程\n\n📋 会话ID: `%s`\n📁 工作目录: `%s`",
                 cp.sessionId != null ? cp.sessionId.substring(0, Math.min(12, cp.sessionId.length())) + "..." : "无",
                 cp.workDir != null ? cp.workDir : "默认"
@@ -833,6 +836,9 @@ public class ClaudeApiService {
         if (cp == null) {
             return "创建新进程失败";
         }
+
+        // 尝试处理排队的消息
+        processNextInQueue(userId);
 
         return String.format("✅ 已创建新进程\n\n📋 工作目录: `%s`",
                 cp.workDir != null ? cp.workDir : "默认"
