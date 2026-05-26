@@ -174,10 +174,10 @@ public class IlInkConnectionHandler {
 
         // 计算预留配额：当前消息数 + 等待结果的进程数 >= 10 时追加警告
         int reservedQuota = quotaManager.getReservedQuota(userId);
-        int totalUsed = currentCount + reservedQuota;
+        int remaining = MESSAGE_LIMIT - currentCount - reservedQuota;
         String finalText = text;
-        if (!isUnlimitedType && totalUsed >= MESSAGE_LIMIT - 1) {
-            finalText = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（" + totalUsed + "/" + MESSAGE_LIMIT + "）**\n> 已用: " + currentCount + " 条, 预留: " + reservedQuota + " 条\n> 后续工具通知将被屏蔽\n> 发送 `v-refresh` 可刷新配额以接收更多通知";
+        if (!isUnlimitedType && remaining <= 1) {
+            finalText = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（已用 " + currentCount + " + 预留 " + reservedQuota + " = " + (currentCount + reservedQuota) + "/" + MESSAGE_LIMIT + "）**\n> 剩余: " + remaining + " 条\n> 后续工具通知将被屏蔽\n> 发送 `v-refresh` 可刷新配额以接收更多通知";
         }
 
         try {
