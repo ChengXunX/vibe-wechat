@@ -791,19 +791,23 @@ public class MessageRouter {
         if (sessions.isEmpty()) {
             sb.append("暂无磁盘会话");
         } else {
-            sb.append("| 序号 | Session ID | 状态 | 工作目录 | 启动时间 |\n");
-            sb.append("|------|------------|------|----------|----------|\n");
-
             java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("MM-dd HH:mm");
+            java.text.SimpleDateFormat fullSdf = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
             for (int i = 0; i < sessions.size(); i++) {
                 ClaudeApiService.DiskSession s = sessions.get(i);
                 String time = s.startedAt > 0 ? sdf.format(new java.util.Date(s.startedAt)) : "未知";
-                String shortId = s.sessionId.length() > 8 ? s.sessionId.substring(0, 8) + "..." : s.sessionId;
-                String cwd = s.cwd != null ? (s.cwd.length() > 20 ? "..." + s.cwd.substring(s.cwd.length() - 17) : s.cwd) : "未知";
-                sb.append(String.format("| %d | `%s` | %s | `%s` | %s |\n",
-                    i + 1, shortId, s.status, cwd, time));
+                String fullTime = s.startedAt > 0 ? fullSdf.format(new java.util.Date(s.startedAt)) : "未知";
+                String shortId = s.sessionId.length() > 12 ? s.sessionId.substring(0, 12) + "..." : s.sessionId;
+                String cwd = s.cwd != null ? s.cwd : "未知";
+                String dirName = s.cwd != null ? java.nio.file.Path.of(s.cwd).getFileName().toString() : "未知";
+
+                sb.append(String.format("**%d.** `%s`\n", i + 1, shortId));
+                sb.append(String.format("   📁 `%s`\n", cwd));
+                sb.append(String.format("   🕐 %s (%s)\n", time, s.status));
+                if (i < sessions.size() - 1) sb.append("\n");
             }
-            sb.append("\n使用 `v-resume <序号或Session ID>` 恢复会话");
+            sb.append("\n💡 使用 `v-resume <序号>` 恢复会话");
         }
         ilinkService.sendText(userId, sb.toString(), contextToken);
     }

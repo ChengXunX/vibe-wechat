@@ -17,6 +17,8 @@
 | 关键词过滤 | 过滤特定关键词的回复 |
 | Token 统计 | 显示每次对话的 Token 消耗 |
 | 路径自动识别 | 自动检测 Claude 安装位置 |
+| 磁盘会话恢复 | 重启后恢复历史会话 |
+| 孤儿进程清理 | 自动清理异常关闭的子进程 |
 
 ## 快速开始
 
@@ -93,9 +95,11 @@ cd /home/chengxun/vibe-wechat
 | 命令 | 说明 |
 |------|------|
 | `v-new` / `v-clear` | 新建/清空会话 |
-| `v-sessions` | 列出会话 |
+| `v-sessions` | 列出内存会话 |
 | `v-session <id>` | 切换会话 |
 | `v-delete <id>` | 删除会话 |
+| `v-disk-sessions` | 查看磁盘历史会话 |
+| `v-resume <序号>` | 恢复磁盘会话 |
 
 ### 进程管理
 
@@ -180,6 +184,109 @@ vibe-wechat/
 ├── vibe-wechat.sh    # 启动脚本
 └── README.md
 ```
+
+## 跨平台打包
+
+使用 jpackage 将应用打包为原生安装包，支持 Windows、macOS、Linux。
+
+### 环境要求
+
+- JDK 25+ (需包含 jpackage 工具)
+- 各平台打包要求：
+  - **Windows**: WiX Toolset 3.x 或 NSIS
+  - **macOS**: Xcode Command Line Tools
+  - **Linux**: rpm-build (RPM) 或 fakeroot (DEB)
+
+### 快速打包
+
+```bash
+# 打包当前平台
+./package.sh
+
+# 或手动打包
+mvn clean package -DskipTests
+./package-native.sh
+```
+
+### 手动打包
+
+```bash
+# 1. 先打包 jar
+mvn clean package -DskipTests
+
+# 2. 使用 jpackage 打包原生安装包
+# Windows (exe)
+jpackage --input target --main-jar vibe-wechat-1.0-SNAPSHOT.jar \
+  --main-class com.chengxun.vibewechat.VibeWeChatApplication \
+  --name VibeWeChat --type exe --win-menu --win-shortcut
+
+# macOS (pkg)
+jpackage --input target --main-jar vibe-wechat-1.0-SNAPSHOT.jar \
+  --main-class com.chengxun.vibewechat.VibeWeChatApplication \
+  --name VibeWeChat --type pkg --mac-package-identifier com.chengxun.vibewechat
+
+# Linux (rpm)
+jpackage --input target --main-jar vibe-wechat-1.0-SNAPSHOT.jar \
+  --main-class com.chengxun.vibewechat.VibeWeChatApplication \
+  --name VibeWeChat --type rpm --linux-package-name vibe-wechat
+
+# Linux (deb)
+jpackage --input target --main-jar vibe-wechat-1.0-SNAPSHOT.jar \
+  --main-class com.chengxun.vibewechat.VibeWeChatApplication \
+  --name VibeWeChat --type deb --linux-package-name vibe-wechat
+```
+
+### GitHub Actions 自动打包
+
+在各平台上分别执行打包命令，或使用 GitHub Actions 自动化：
+
+```yaml
+# .github/workflows/release.yml
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            type: exe
+          - os: macos-latest
+            type: pkg
+          - os: ubuntu-latest
+            type: rpm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+      - run: mvn clean package -DskipTests
+      - name: Build native package
+        run: |
+          jpackage --input target \
+            --main-jar vibe-wechat-1.0-SNAPSHOT.jar \
+            --main-class com.chengxun.vibewechat.VibeWeChatApplication \
+            --name VibeWeChat \
+            --type ${{ matrix.type }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vibe-wechat-${{ matrix.os }}
+          path: VibeWeChat*
+```
+
+### 输出文件
+
+| 平台 | 文件格式 | 说明 |
+|------|----------|------|
+| Windows | `.exe` | 安装程序 |
+| macOS | `.pkg` | 安装包 |
+| Linux | `.rpm` | RPM 软件包 |
+| Linux | `.deb` | DEB 软件包 |
 
 ## License
 
