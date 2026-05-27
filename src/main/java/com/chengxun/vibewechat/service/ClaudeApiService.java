@@ -752,6 +752,15 @@ public class ClaudeApiService {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null || pool.isEmpty()) return "无活跃进程";
 
+        // 找到父进程的序号
+        int parentIndex = -1;
+        for (int i = 0; i < pool.size(); i++) {
+            if (pool.get(i).isParent) {
+                parentIndex = i + 1;
+                break;
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("| # | 类型 | 来源 | 会话ID | 工作目录 | 状态 |\n");
         sb.append("|---|------|------|--------|----------|------|\n");
@@ -759,7 +768,7 @@ public class ClaudeApiService {
         for (int i = 0; i < pool.size(); i++) {
             ClaudeProcess p = pool.get(i);
             String type = p.isParent ? "父进程" : "子进程";
-            String source = p.isParent ? "-" : "克隆自父进程";
+            String source = p.isParent ? "-" : "克隆自父进程#" + parentIndex;
             String sessionId = p.sessionId != null ? p.sessionId.substring(0, Math.min(12, p.sessionId.length())) + "..." : "无";
             String workDir = p.workDir != null ? p.workDir : "默认";
             String status = p.busy ? "忙碌" : "空闲";
