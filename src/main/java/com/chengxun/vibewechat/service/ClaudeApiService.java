@@ -35,7 +35,7 @@ public class ClaudeApiService {
     @Autowired
     private QuotaManager quotaManager;
 
-    // 会话管理
+    // 会话管理（tokenUsageMap 按 sessionId 统计，确保切换 session 后数据独立）
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
@@ -476,13 +476,16 @@ public class ClaudeApiService {
                             }
                         }
 
-                        // 解析 token 使用量
+                        // 解析 token 使用量（按 sessionId 统计，确保切换 session 后数据独立）
                         com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
                         if (usage != null) {
                             int inputTokens = usage.get("input_tokens").asInt();
                             int outputTokens = usage.get("output_tokens").asInt();
-                            TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(userId, k -> new TokenUsage());
-                            tokenUsage.add(inputTokens, outputTokens);
+                            String currentSessionId = cp.sessionId != null ? cp.sessionId : sessionIds.get(userId);
+                            if (currentSessionId != null) {
+                                TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(currentSessionId, k -> new TokenUsage());
+                                tokenUsage.add(inputTokens, outputTokens);
+                            }
                         }
 
                         // 收到 result，退出循环
@@ -1125,11 +1128,35 @@ public class ClaudeApiService {
     }
 
     public void clearHistory(String userId) {
-        tokenUsageMap.remove(userId);
+        // 清除该用户所有 session 的 token 用量
+        List<String> sessions = sessionHistory.get(userId);
+        if (sessions != null) {
+            sessions.forEach(tokenUsageMap::remove);
+        }
+        String currentSession = sessionIds.get(userId);
+        if (currentSession != null) {
+            tokenUsageMap.remove(currentSession);
+        }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
         quotaManager.reset(userId);
         destroyProcessGroup(userId);
+    }
+
+    /**
+     * 仅清除当前 session，保留其他 session
+     */
+    public void clearCurrentSession(String userId) {
+        String currentSession = sessionIds.get(userId);
+        if (currentSession != null) {
+            tokenUsageMap.remove(currentSession);
+            List<String> history = sessionHistory.get(userId);
+            if (history != null) {
+                history.remove(currentSession);
+            }
+        }
+        sessionIds.remove(userId);
+        quotaManager.reset(userId);
     }
 
     public String getSessionId(String userId) {
@@ -1164,13 +1191,19 @@ public class ClaudeApiService {
     }
 
     public TokenUsage getTokenUsage(String userId) {
-        return tokenUsageMap.getOrDefault(userId, new TokenUsage());
+        String sessionId = sessionIds.get(userId);
+        if (sessionId != null) {
+            return tokenUsageMap.getOrDefault(sessionId, new TokenUsage());
+        }
+        return new TokenUsage();
     }
 
     public String getTokenUsageSummary(String userId) {
         TokenUsage usage = getTokenUsage(userId);
-        return String.format("输入: %s, 输出: %s, 总计: %s",
-                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens));
+        String sessionId = sessionIds.get(userId);
+        String sessionLabel = sessionId != null ? " (Session: " + sessionId.substring(0, Math.min(12, sessionId.length())) + "...)" : "";
+        return String.format("输入: %s, 输出: %s, 总计: %s%s",
+                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens), sessionLabel);
     }
 
     public String getTaskCompletionSummary(String userId, long durationMs) {
