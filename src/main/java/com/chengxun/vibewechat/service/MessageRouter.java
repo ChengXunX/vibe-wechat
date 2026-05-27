@@ -279,11 +279,15 @@ public class MessageRouter {
             oldThread.interrupt();
         }
 
+        // 使用 volatile 标志控制 typing 线程，避免 interrupt 后仍发送 sendTyping
+        java.util.concurrent.atomic.AtomicBoolean typingActive = new java.util.concurrent.atomic.AtomicBoolean(true);
         Thread typingThread = new Thread(() -> {
-            while (!Thread.currentThread().isInterrupted()) {
+            while (typingActive.get() && !Thread.currentThread().isInterrupted()) {
                 try {
                     Thread.sleep(5000);
-                    ilinkService.sendTyping(userId);
+                    if (typingActive.get()) {
+                        ilinkService.sendTyping(userId);
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
@@ -314,7 +318,7 @@ public class MessageRouter {
             if (!blocked) {
                 if (filterConfig.isShowTaskCompletion()) {
                     String taskSummary = claudeApiService.getTaskSummary(userId, message);
-                    String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration);
+                    String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration, response);
                     String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else {
@@ -331,6 +335,7 @@ public class MessageRouter {
         } finally {
             quotaManager.releaseResultSlot(userId);
             quotaManager.recordMessageSent(userId, "result");
+            typingActive.set(false);
             typingThread.interrupt();
             activeTypingThreads.remove(userId, typingThread);
             ilinkService.sendStopTyping(userId);

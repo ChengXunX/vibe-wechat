@@ -42,6 +42,9 @@ public class ClaudeApiService {
     private final Map<String, String> subtaskNames = new ConcurrentHashMap<>();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
+    // 上下文压缩记忆文档（sessionId -> 文件路径）
+    private final Map<String, String> memoryDocuments = new ConcurrentHashMap<>();
+
     // 磁盘会话缓存
     private List<DiskSession> diskSessions = new ArrayList<>();
 
@@ -183,7 +186,7 @@ public class ClaudeApiService {
                 // Worker 空闲，如果它没有活跃的 CLI 进程，为其创建一个
                 if (!p.hasActiveCliProcess()) {
                     if (!attachCliProcess(p, userId)) {
-                        return null; // 创建失败
+                        continue; // 创建失败，尝试下一个空闲进程
                     }
                 }
                 return p;
@@ -398,9 +401,26 @@ public class ClaudeApiService {
                 return "Claude CLI 进程已死亡";
             }
 
+            // 如果没有 session（新会话），检查是否有记忆文档可恢复
+            String effectiveMessage = message;
+            if (cp.sessionId == null) {
+                String workDir = cp.workDir;
+                if (workDir == null || workDir.isEmpty()) {
+                    workDir = claudeConfig.getWorkDir();
+                }
+                if (workDir == null || workDir.isEmpty()) {
+                    workDir = System.getProperty("user.dir");
+                }
+                String memoryContent = getLatestMemoryDocument(workDir);
+                if (memoryContent != null && !memoryContent.isEmpty()) {
+                    effectiveMessage = "[系统上下文恢复] 以下是之前会话的压缩记忆文档，请基于此上下文继续工作：\n\n" + memoryContent + "\n\n---\n\n[用户消息] " + message;
+                    log.info("Prepended memory document to message for user: {}", userId);
+                }
+            }
+
             // 通过 stdin 发送消息（text 格式，纯文本）
-            log.info("Sending message to Claude stdin for user {}: {}", userId, message.length() > 200 ? message.substring(0, 200) + "..." : message);
-            cp.stdin.write((message + "\n").getBytes());
+            log.info("Sending message to Claude stdin for user {}: {}", userId, effectiveMessage.length() > 200 ? effectiveMessage.substring(0, 200) + "..." : effectiveMessage);
+            cp.stdin.write((effectiveMessage + "\n").getBytes());
             cp.stdin.flush();
             // 关闭 stdin 通知 Claude 输入结束，开始处理
             cp.stdin.close();
@@ -467,6 +487,26 @@ public class ClaudeApiService {
                                 }
                             }
                         }
+                    } else if ("error".equals(type)) {
+                        // 捕获 Claude API 错误（额度用尽、过载等）
+                        String errorMsg = "";
+                        if (node.has("error")) {
+                            com.fasterxml.jackson.databind.JsonNode errorNode = node.get("error");
+                            if (errorNode.has("message")) {
+                                errorMsg = errorNode.get("message").asText();
+                            } else if (errorNode.has("type")) {
+                                errorMsg = errorNode.get("type").asText();
+                            } else {
+                                errorMsg = errorNode.toString();
+                            }
+                        } else if (node.has("message")) {
+                            errorMsg = node.get("message").asText();
+                        }
+                        if (errorMsg.isEmpty()) {
+                            errorMsg = node.toString();
+                        }
+                        output.append("⚠️ Claude API 错误: ").append(errorMsg).append("\n");
+                        log.error("Claude API error for user {}: {}", userId, errorMsg);
                     } else if ("result".equals(type)) {
                         // 保存 session_id
                         com.fasterxml.jackson.databind.JsonNode sessionNode = node.get("session_id");
@@ -528,13 +568,26 @@ public class ClaudeApiService {
             cp.destroyCliProcess();
             quotaManager.processEnded(userId);
 
+            // 检查 stderr 是否有错误信息
+            String stderr = stderrOutput.toString().trim();
+            boolean hasStderrError = !stderr.isEmpty() && (
+                    stderr.contains("error") || stderr.contains("Error") ||
+                    stderr.contains("ERROR") || stderr.contains("quota") ||
+                    stderr.contains("limit") || stderr.contains("overloaded") ||
+                    stderr.contains("rate_limit") || stderr.contains("authentication"));
+
             if (result.isEmpty()) {
-                String stderr = stderrOutput.toString().trim();
                 if (!stderr.isEmpty()) {
                     return "Claude 未返回结果\n\n错误信息:\n" + stderr;
                 }
                 return "Claude 未返回结果";
             }
+
+            // 如果有 stderr 错误信息，附加到结果中
+            if (hasStderrError) {
+                result = result + "\n\n⚠️ 错误信息:\n" + stderr;
+            }
+
             return result;
 
         } catch (Exception e) {
@@ -552,13 +605,38 @@ public class ClaudeApiService {
 
         PendingRequest next = queue.poll();
         if (next != null) {
-            sendMessageAsync(userId, next.message).whenComplete((result, ex) -> {
+            CompletableFuture<String> resultFuture = sendMessageAsync(userId, next.message);
+            resultFuture.whenComplete((result, ex) -> {
                 if (ex != null) {
                     next.future.completeExceptionally(ex);
                 } else {
                     next.future.complete(result);
                 }
             });
+
+            // 如果请求被重新入队（sendMessageAsync 返回未完成的 future 且请求在队列中），
+            // 安排延迟重试，避免请求永远卡在队列中
+            if (!resultFuture.isDone()) {
+                BlockingQueue<PendingRequest> currentQueue = requestQueues.get(userId);
+                if (currentQueue != null && !currentQueue.isEmpty()) {
+                    log.info("Request re-queued for user: {}, scheduling retry in 3s", userId);
+                    cleanupScheduler.schedule(() -> processNextInQueue(userId), 3, TimeUnit.SECONDS);
+                }
+            }
+        }
+    }
+
+    /**
+     * 取消所有待处理的排队请求，完成其 future 避免 handleMessage 永久阻塞
+     */
+    private void cancelPendingRequests(String userId) {
+        BlockingQueue<PendingRequest> queue = requestQueues.remove(userId);
+        if (queue != null) {
+            PendingRequest pending;
+            while ((pending = queue.poll()) != null) {
+                pending.future.complete("⚠️ 进程已销毁，排队任务已取消");
+                log.info("Cancelled pending request for user: {}", userId);
+            }
         }
     }
 
@@ -585,7 +663,7 @@ public class ClaudeApiService {
         if (pool != null) {
             pool.forEach(ClaudeProcess::destroy);
         }
-        requestQueues.remove(userId);
+        cancelPendingRequests(userId);
     }
 
     /**
@@ -602,7 +680,7 @@ public class ClaudeApiService {
             pool.forEach(ClaudeProcess::destroy);
         }
         processPools.remove(userId);
-        requestQueues.remove(userId);
+        cancelPendingRequests(userId);
     }
 
     public void destroyAllProcesses(String userId) {
@@ -1231,10 +1309,12 @@ public class ClaudeApiService {
         List<String> sessions = sessionHistory.get(userId);
         if (sessions != null) {
             sessions.forEach(tokenUsageMap::remove);
+            sessions.forEach(memoryDocuments::remove); // 清理记忆文档绑定
         }
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
+            memoryDocuments.remove(currentSession); // 清理记忆文档绑定
         }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
@@ -1249,6 +1329,7 @@ public class ClaudeApiService {
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
+            memoryDocuments.remove(currentSession); // 清理记忆文档绑定
             List<String> history = sessionHistory.get(userId);
             if (history != null) {
                 history.remove(currentSession);
@@ -1265,10 +1346,12 @@ public class ClaudeApiService {
         List<String> sessions = sessionHistory.get(userId);
         if (sessions != null) {
             sessions.forEach(tokenUsageMap::remove);
+            sessions.forEach(memoryDocuments::remove); // 清理记忆文档绑定
         }
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
+            memoryDocuments.remove(currentSession); // 清理记忆文档绑定
         }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
@@ -1308,9 +1391,135 @@ public class ClaudeApiService {
                 sessionIds.remove(userId);
                 destroyProcessGroup(userId);
             }
+            // 清理记忆文档绑定
+            memoryDocuments.remove(sessionId);
             return true;
         }
         return false;
+    }
+
+    // ==================== 记忆文档管理 ====================
+
+    /**
+     * 保存上下文压缩记忆文档
+     * @param sessionId 会话ID
+     * @param workDir 工作目录
+     * @param content 文档内容
+     * @return 文件路径，失败返回 null
+     */
+    public String saveMemoryDocument(String sessionId, String workDir, String content) {
+        try {
+            Path memoryDir = Path.of(workDir, ".vibe-memory");
+            if (!Files.exists(memoryDir)) {
+                Files.createDirectories(memoryDir);
+            }
+
+            String fileName = "context-" + sessionId.substring(0, Math.min(12, sessionId.length())) + ".md";
+            Path filePath = memoryDir.resolve(fileName);
+
+            String documentContent = String.format("""
+                    # 上下文压缩文档
+
+                    **会话ID**: %s
+                    **工作目录**: %s
+                    **生成时间**: %s
+
+                    ---
+
+                    %s
+                    """,
+                    sessionId,
+                    workDir,
+                    java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")),
+                    content
+            );
+
+            Files.write(filePath, documentContent.getBytes());
+            memoryDocuments.put(sessionId, filePath.toString());
+            log.info("Saved memory document for session {}: {}", sessionId, filePath);
+            return filePath.toString();
+        } catch (Exception e) {
+            log.error("Failed to save memory document for session {}", sessionId, e);
+            return null;
+        }
+    }
+
+    /**
+     * 获取指定工作目录的最新记忆文档内容
+     * @param workDir 工作目录
+     * @return 文档内容，不存在返回 null
+     */
+    public String getLatestMemoryDocument(String workDir) {
+        try {
+            Path memoryDir = Path.of(workDir, ".vibe-memory");
+            if (!Files.exists(memoryDir)) {
+                return null;
+            }
+
+            // 查找最新的记忆文档
+            Path latestFile = null;
+            long latestTime = 0;
+
+            try (var stream = Files.list(memoryDir)) {
+                for (Path file : (Iterable<Path>) stream::iterator) {
+                    if (file.toString().endsWith(".md")) {
+                        long lastModified = Files.getLastModifiedTime(file).toMillis();
+                        if (lastModified > latestTime) {
+                            latestTime = lastModified;
+                            latestFile = file;
+                        }
+                    }
+                }
+            }
+
+            if (latestFile != null) {
+                String content = new String(Files.readAllBytes(latestFile));
+                log.info("Loaded memory document from: {}", latestFile);
+                return content;
+            }
+        } catch (Exception e) {
+            log.error("Failed to load memory document from {}", workDir, e);
+        }
+        return null;
+    }
+
+    /**
+     * 删除指定会话的记忆文档
+     * @param sessionId 会话ID
+     */
+    public void deleteMemoryDocument(String sessionId) {
+        String filePath = memoryDocuments.remove(sessionId);
+        if (filePath != null) {
+            try {
+                Files.deleteIfExists(Path.of(filePath));
+                log.info("Deleted memory document for session {}: {}", sessionId, filePath);
+            } catch (Exception e) {
+                log.error("Failed to delete memory document for session {}", sessionId, e);
+            }
+        }
+    }
+
+    /**
+     * 删除指定工作目录下的所有记忆文档
+     * @param workDir 工作目录
+     */
+    public void deleteAllMemoryDocuments(String workDir) {
+        try {
+            Path memoryDir = Path.of(workDir, ".vibe-memory");
+            if (Files.exists(memoryDir)) {
+                try (var stream = Files.list(memoryDir)) {
+                    for (Path file : (Iterable<Path>) stream::iterator) {
+                        Files.deleteIfExists(file);
+                    }
+                }
+                Files.deleteIfExists(memoryDir);
+                log.info("Deleted all memory documents from {}", workDir);
+            }
+        } catch (Exception e) {
+            log.error("Failed to delete memory documents from {}", workDir, e);
+        }
+        // 清理绑定关系
+        memoryDocuments.entrySet().removeIf(entry -> entry.getValue().startsWith(workDir));
     }
 
     public TokenUsage getTokenUsage(String userId) {
@@ -1329,7 +1538,7 @@ public class ClaudeApiService {
                 formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens), sessionLabel);
     }
 
-    public String getTaskCompletionSummary(String userId, long durationMs) {
+    public String getTaskCompletionSummary(String userId, long durationMs, String responseContent) {
         TokenUsage usage = getTokenUsage(userId);
         String duration = formatDuration(durationMs);
         String sessionId = sessionIds.get(userId);
@@ -1338,14 +1547,22 @@ public class ClaudeApiService {
         int contextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
 
-        // 自动压缩检查：超过阈值时清除会话以压缩上下文
+        // 自动压缩检查：超过阈值时生成记忆文档并清除会话
         String compactionInfo = "";
         if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
+            // 保存记忆文档
+            String workDir = claudeConfig.getWorkDir();
+            if (workDir == null || workDir.isEmpty()) {
+                workDir = System.getProperty("user.dir");
+            }
+            String memoryPath = saveMemoryDocument(sessionId, workDir, responseContent);
+            String memoryNote = memoryPath != null ? "\n📁 记忆文档已保存: `.vibe-memory/`" : "";
+
             // 清除当前会话，下次消息将使用新会话（自动压缩）
             sessionIds.remove(userId);
             destroyProcessGroup(userId);
-            compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "% 超过阈值 " + claudeConfig.getContextCompactionThreshold() + "%）\n下次消息将使用新会话";
-            log.info("Auto compaction triggered for user: {}, context: {}%", userId, contextPercent);
+            compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "% 超过阈值 " + claudeConfig.getContextCompactionThreshold() + "%）" + memoryNote + "\n下次消息将自动读取记忆文档恢复上下文";
+            log.info("Auto compaction triggered for user: {}, context: {}%, memory: {}", userId, contextPercent, memoryPath);
         }
 
         return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s%s",
