@@ -410,6 +410,49 @@ public class ClaudeApiService {
         return future;
     }
 
+    /**
+     * 发送消息并返回结果 Future 和处理该消息的进程序号
+     * @return SendResult 包含 future 和 processIndex（1-based，排队时为 -1）
+     */
+    public SendResult sendMessageWithIndex(String userId, String message) {
+        CompletableFuture<String> future = new CompletableFuture<>();
+
+        if (!quotaManager.canSendToolMessage(userId)) {
+            future.complete("消息次数已达上限（10条），请等待当前任务完成");
+            return new SendResult(future, -1);
+        }
+
+        ClaudeProcess cp = getOrCreateProcess(userId);
+        if (cp == null) {
+            BlockingQueue<PendingRequest> queue = requestQueues.computeIfAbsent(userId,
+                    k -> new LinkedBlockingQueue<>());
+            queue.offer(new PendingRequest(message, future));
+            log.info("Request queued for user: {}, queue size: {}", userId, queue.size());
+            return new SendResult(future, -1);
+        }
+
+        int processIndex = getProcessIndex(userId, cp);
+
+        cp.busy = true;
+        cp.lastActiveTime = System.currentTimeMillis();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                String response = processMessage(cp, userId, message);
+                future.complete(response);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            } finally {
+                cp.busy = false;
+                processNextInQueue(userId);
+            }
+        });
+
+        return new SendResult(future, processIndex);
+    }
+
+    public record SendResult(CompletableFuture<String> future, int processIndex) {}
+
     private String processMessage(ClaudeProcess cp, String userId, String message) {
         long startTime = System.currentTimeMillis();
 
@@ -834,8 +877,30 @@ public class ClaudeApiService {
     }
 
     /**
-     * 获取独立进程数量
+     * 获取进程在池中的序号（1-based），找不到返回 -1
      */
+    public int getProcessIndex(String userId, ClaudeProcess target) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null || target == null) return -1;
+        for (int i = 0; i < pool.size(); i++) {
+            if (pool.get(i) == target) return i + 1;
+        }
+        return -1;
+    }
+
+    /**
+     * 获取当前进程组的进程数（排除独立进程）
+     */
+    public int getGroupProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess p : pool) {
+            if (!p.isIndependent) count++;
+        }
+        return count;
+    }
+
     public int getIndependentProcessCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return 0;
@@ -956,24 +1021,16 @@ public class ClaudeApiService {
 
         ClaudeProcess activeProcess = pool.get(activeIndex);
 
-        // 如果当前进程是子进程，克隆到父进程下；否则克隆当前进程
+        // 克隆当前活跃进程
         ClaudeProcess cp;
-        if (activeProcess.isParent) {
-            // 当前是父进程，直接 fork
+        if (activeProcess.isIndependent) {
+            // 当前是独立进程，直接 fork 自己的 session 和工作目录
+            cp = forkProcess(userId, pool, activeProcess.sessionId, activeProcess.workDir);
+        } else if (activeProcess.isParent) {
+            // 当前是父进程，fork 共享父进程的 session 和工作目录
             cp = forkProcess(userId, pool);
         } else {
-            // 当前是子进程，找到父进程并在其下 fork
-            ClaudeProcess parent = null;
-            for (ClaudeProcess p : pool) {
-                if (p.isParent) {
-                    parent = p;
-                    break;
-                }
-            }
-            if (parent == null) {
-                return "无活跃的父进程可克隆";
-            }
-            // 使用当前子进程的 session 和工作目录
+            // 当前是子进程，fork 共享当前子进程的 session 和工作目录
             cp = forkProcess(userId, pool, activeProcess.sessionId, activeProcess.workDir);
         }
 

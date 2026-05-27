@@ -240,6 +240,10 @@ public class MessageRouter {
         // 预留结果槽位
         quotaManager.reserveForResult(userId);
 
+        // 先发送消息获取进程索引（通知需要）
+        ClaudeApiService.SendResult sendResult = claudeApiService.sendMessageWithIndex(userId, message);
+        int assignedProcessIndex = sendResult.processIndex();
+
         if (filterConfig.isShowMessageStatus()) {
             String sessionId = claudeApiService.getSessionId(userId);
             String model = claudeApiService.getModel();
@@ -248,24 +252,25 @@ public class MessageRouter {
             String sessionDisplay = sessionId != null ? sessionId : "新会话";
             int processCount = claudeApiService.getProcessCount(userId);
             int busyCount = claudeApiService.getBusyProcessCount(userId);
+            int groupProcessCount = claudeApiService.getGroupProcessCount(userId);
 
             // 根据进程组状态显示不同的处理提示（仅统计进程组内空闲，排除独立进程）
             int groupIdleCount = claudeApiService.getGroupIdleProcessCount(userId);
             String statusHint;
             if (processCount == 0) {
-                // 首次使用：没有进程，需要创建
                 statusHint = "\n⚡ 首次使用，正在创建进程并处理任务...";
             } else if (groupIdleCount > 0) {
-                // 有空闲进程：直接处理
                 statusHint = "\n🚀 开始处理任务（组内空闲进程: " + groupIdleCount + "）";
             } else {
-                // 全部忙碌：排队等待
                 statusHint = "\n⏳ 进入等待队列（忙碌进程: " + busyCount + "/" + processCount + "）";
             }
 
+            String processIndexDisplay = assignedProcessIndex > 0 ? "#" + assignedProcessIndex : "排队中";
+            String groupInfo = groupProcessCount > 1 ? "\n👥 当前进程组: " + groupProcessCount + " 个" : "";
+
             String statusMsg = String.format(
-                "✅ 收到消息\n\n📋 会话ID: `%s`\n🤖 模型: `%s`\n📁 工作目录: `%s`\n⚙️ 进程: %d 个%s",
-                sessionDisplay, model, workDir, processCount, statusHint
+                "✅ 收到消息\n\n🔢 进程: %s\n📋 会话ID: `%s`\n🤖 模型: `%s`\n📁 工作目录: `%s`\n⚙️ 总进程: %d 个%s%s",
+                processIndexDisplay, sessionDisplay, model, workDir, processCount, groupInfo, statusHint
             );
             ilinkService.sendText(userId, statusMsg, contextToken, "result");
             quotaManager.recordMessageSent(userId, "result");
@@ -299,8 +304,7 @@ public class MessageRouter {
         typingThread.start();
 
         try {
-            CompletableFuture<String> future = claudeApiService.sendMessageAsync(userId, message);
-            String response = future.get(); // 阻塞等待结果
+            String response = sendResult.future().get(); // 阻塞等待结果
             long duration = System.currentTimeMillis() - startTime;
 
             boolean blocked = false;
@@ -315,18 +319,20 @@ public class MessageRouter {
                 response = "Claude 未返回结果，请检查日志或稍后重试";
             }
 
+            String processPrefix = assignedProcessIndex > 0 ? "[#" + assignedProcessIndex + "] " : "";
+
             if (!blocked) {
                 if (filterConfig.isShowTaskCompletion()) {
                     String taskSummary = claudeApiService.getTaskSummary(userId, message);
                     String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration, response);
-                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
+                    String fullResponse = processPrefix + "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else {
                     ilinkService.sendText(userId, response, contextToken, "result");
                 }
             } else {
                 if (filterConfig.isShowTaskCompletion()) {
-                    ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
+                    ilinkService.sendText(userId, processPrefix + "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
                 }
             }
         } catch (Exception e) {
