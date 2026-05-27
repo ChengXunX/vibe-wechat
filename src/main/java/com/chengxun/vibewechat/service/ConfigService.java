@@ -411,6 +411,7 @@ public class ConfigService {
             String maskedKey = profile.getApiKey() != null && profile.getApiKey().length() > 8 ?
                     profile.getApiKey().substring(0, 4) + "****" : "未设置";
             sb.append("- `").append(profile.getName()).append("`").append(marker)
+              .append("\n  API: ").append(profile.getApiUrl() != null ? profile.getApiUrl() : "未设置")
               .append("\n  模型: ").append(profile.getModel())
               .append("\n  Key: ").append(maskedKey).append("\n");
         }

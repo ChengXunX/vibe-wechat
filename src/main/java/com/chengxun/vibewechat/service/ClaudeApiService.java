@@ -114,6 +114,7 @@ public class ClaudeApiService {
         // Fork 进程组支持
         boolean isParent = false;   // 是否为父进程
         String parentId = null;     // 父进程的 userId（子进程才有）
+        boolean isIndependent = false;  // 是否为独立进程（v-newproc 创建）
 
         /**
          * 检查 Worker 是否有活跃的 Claude CLI 进程
@@ -276,20 +277,6 @@ public class ClaudeApiService {
 
             quotaManager.processStarted(userId);
 
-            // 启动 stderr 读取线程（用于日志）
-            Thread stderrThread = new Thread(() -> {
-                try {
-                    String line;
-                    while ((line = worker.stderr.readLine()) != null) {
-                        log.info("Claude stderr for user {}: {}", userId, line);
-                    }
-                } catch (Exception e) {
-                    log.debug("Claude stderr reader error for user {}: {}", userId, e.getMessage());
-                }
-            });
-            stderrThread.setDaemon(true);
-            stderrThread.start();
-
             return true;
 
         } catch (Exception e) {
@@ -302,8 +289,13 @@ public class ClaudeApiService {
      * 创建新的 Worker（伪进程）
      */
     private ClaudeProcess createNewWorker(String userId, List<ClaudeProcess> pool, boolean isParent) {
+        return createNewWorker(userId, pool, isParent, false);
+    }
+
+    private ClaudeProcess createNewWorker(String userId, List<ClaudeProcess> pool, boolean isParent, boolean isIndependent) {
         ClaudeProcess worker = new ClaudeProcess();
         worker.isParent = isParent;
+        worker.isIndependent = isIndependent;
         worker.thinkingLevel = thinkingConfig.getLevel();
 
         // 设置工作目录
@@ -414,6 +406,22 @@ public class ClaudeApiService {
             cp.stdin.close();
             log.info("Message flushed and stdin closed for user: {}", userId);
 
+            // 后台收集 stderr 输出（用于错误诊断）
+            StringBuilder stderrOutput = new StringBuilder();
+            Thread stderrCollector = new Thread(() -> {
+                try {
+                    String line;
+                    while ((line = cp.stderr.readLine()) != null) {
+                        stderrOutput.append(line).append("\n");
+                        log.info("Claude stderr for user {}: {}", userId, line);
+                    }
+                } catch (Exception e) {
+                    log.debug("Claude stderr reader error for user {}: {}", userId, e.getMessage());
+                }
+            });
+            stderrCollector.setDaemon(true);
+            stderrCollector.start();
+
             // 读取响应
             StringBuilder output = new StringBuilder();
             String line;
@@ -476,6 +484,17 @@ public class ClaudeApiService {
                             }
                         }
 
+                        // result 事件也可能包含 content（兼容新版本 Claude CLI）
+                        com.fasterxml.jackson.databind.JsonNode resultContent = node.get("content");
+                        if (resultContent != null && resultContent.isArray()) {
+                            for (com.fasterxml.jackson.databind.JsonNode item : resultContent) {
+                                if (item.has("type") && "text".equals(item.get("type").asText())) {
+                                    String text = item.get("text").asText();
+                                    output.append(text);
+                                }
+                            }
+                        }
+
                         // 解析 token 使用量（按 sessionId 统计，确保切换 session 后数据独立）
                         com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
                         if (usage != null) {
@@ -497,6 +516,9 @@ public class ClaudeApiService {
                 }
             }
 
+            // 等待 stderr 收集线程完成
+            stderrCollector.join(3000);
+
             long duration = System.currentTimeMillis() - startTime;
 
             String result = output.toString().trim();
@@ -506,7 +528,14 @@ public class ClaudeApiService {
             cp.destroyCliProcess();
             quotaManager.processEnded(userId);
 
-            return result.isEmpty() ? "Claude 未返回结果" : result;
+            if (result.isEmpty()) {
+                String stderr = stderrOutput.toString().trim();
+                if (!stderr.isEmpty()) {
+                    return "Claude 未返回结果\n\n错误信息:\n" + stderr;
+                }
+                return "Claude 未返回结果";
+            }
+            return result;
 
         } catch (Exception e) {
             log.error("Failed to process message for user: {}", userId, e);
@@ -680,6 +709,33 @@ public class ClaudeApiService {
         return count;
     }
 
+    /**
+     * 获取当前进程组的空闲进程数（排除独立进程）
+     * 普通消息只会分配给进程组内的 worker，独立进程不会被使用
+     */
+    public int getGroupIdleProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess p : pool) {
+            if (!p.busy && !p.isIndependent) count++;
+        }
+        return count;
+    }
+
+    /**
+     * 获取独立进程数量
+     */
+    public int getIndependentProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess p : pool) {
+            if (p.isIndependent) count++;
+        }
+        return count;
+    }
+
     public int getForkChildCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return 0;
@@ -834,8 +890,8 @@ public class ClaudeApiService {
             pool = processPools.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>());
         }
 
-        // 创建新独立 Worker（不是克隆）
-        ClaudeProcess cp = createNewWorker(userId, pool, true);
+        // 创建新独立 Worker（不是克隆，标记为独立进程）
+        ClaudeProcess cp = createNewWorker(userId, pool, true, true);
         if (cp == null) {
             return "创建新进程失败";
         }
@@ -997,11 +1053,15 @@ public class ClaudeApiService {
                 case "TaskUpdate" -> {
                     String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
                     String taskId = inputNode.has("taskId") ? inputNode.get("taskId").asText() : "";
-                    String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
-                    if (!subject.isEmpty() && taskId != null) {
-                        subtaskNames.put(taskId, subject);
-                    } else if (taskId != null) {
-                        subject = subtaskNames.getOrDefault(taskId, "");
+                    // 始终从缓存获取 subject，避免用 status 值覆盖
+                    String subject = !taskId.isEmpty() ? subtaskNames.getOrDefault(taskId, "") : "";
+                    // 如果输入中带有真实 subject 且缓存为空，则缓存
+                    if (subject.isEmpty() && inputNode.has("subject")) {
+                        String inputSubject = inputNode.get("subject").asText();
+                        if (!inputSubject.isEmpty()) {
+                            subtaskNames.put(taskId, inputSubject);
+                            subject = inputSubject;
+                        }
                     }
                     if ("completed".equals(status)) {
                         yield "✅ 子任务完成" + (subject.isEmpty() ? "" : ": " + subject);
@@ -1161,6 +1221,13 @@ public class ClaudeApiService {
 
     public String getSessionId(String userId) {
         return sessionIds.get(userId);
+    }
+
+    /**
+     * 清除用户的当前 sessionId（切换 API/Key/工作区后调用，避免使用旧 session）
+     */
+    public void clearSessionId(String userId) {
+        sessionIds.remove(userId);
     }
 
     public List<String> getSessionHistory(String userId) {
@@ -1425,7 +1492,22 @@ public class ClaudeApiService {
     public String getInstallPath() { return claudeConfig.getInstallPath(); }
     public void setInstallPath(String path) { claudeConfig.setInstallPath(path); }
     public String getWorkDir() { return claudeConfig.getWorkDir(); }
-    public void setWorkDir(String dir) { claudeConfig.setWorkDir(dir); }
+    public void setWorkDir(String dir) {
+        claudeConfig.setWorkDir(dir);
+        // 同步更新所有已有 worker 的工作目录，避免使用旧目录
+        processPools.forEach((userId, pool) -> {
+            for (ClaudeProcess p : pool) {
+                if (!p.busy) {
+                    p.workDir = dir;
+                    p.sessionId = null; // 切换目录后旧 session 不可用，清除
+                    p.destroyCliProcess(); // 旧 CLI 进程需销毁，下次使用新目录重建
+                }
+            }
+        });
+        // 清除所有用户的 sessionId，避免 --resume 尝试恢复不存在的 session
+        sessionIds.clear();
+    }
+
     public int getContextWindowSize() { return claudeConfig.getContextWindowSize(); }
     public void setContextWindowSize(int size) { claudeConfig.setContextWindowSize(size); }
 
