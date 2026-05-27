@@ -414,31 +414,32 @@ public class MessageRouter {
                         }
                     }
 
-                    int busyCount = claudeApiService.getBusyProcessCount(userId);
+                    // 检查进程组是否有忙碌任务
+                    int groupBusyCount = claudeApiService.getGroupBusyProcessCount(userId);
 
-                    // 检查是否需要清理上下文且进程组繁忙
-                    if (clearContext && busyCount > 0 && !force) {
-                        ilinkService.sendText(userId, "⚠️ 进程组繁忙中（" + busyCount + " 个进程忙碌），无法清空上下文\n\n请等待任务完成，或使用 `v-cd <路径> clear force` 强制停止所有任务后切换", contextToken);
+                    if (groupBusyCount > 0 && !force) {
+                        ilinkService.sendText(userId, "⚠️ 进程组繁忙中（" + groupBusyCount + " 个进程忙碌），无法切换目录\n\n请等待任务完成，或使用 `v-cd <路径> force` 强制停止后切换", contextToken);
+                        return;
+                    }
+
+                    // force=true 时先强制停止进程组
+                    if (groupBusyCount > 0 && force) {
+                        claudeApiService.forceStopAll(userId);
+                        ilinkService.sendText(userId, "⚠️ 已强制停止 " + groupBusyCount + " 个忙碌进程", contextToken);
+                    }
+
+                    System.setProperty("user.dir", dir.getAbsolutePath());
+                    claudeApiService.setWorkDir(dir.getAbsolutePath());
+                    configService.saveConfig();
+
+                    if (clearContext) {
+                        claudeApiService.clearCurrentSession(userId);
+                        ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n当前会话已清空", contextToken);
                     } else {
-                        // 如果需要清理上下文且进程组繁忙且 force=true，先强制停止
-                        if (clearContext && busyCount > 0 && force) {
-                            claudeApiService.forceStopAll(userId);
-                            ilinkService.sendText(userId, "⚠️ 已强制停止 " + busyCount + " 个忙碌进程", contextToken);
-                        }
-
-                        System.setProperty("user.dir", dir.getAbsolutePath());
-                        claudeApiService.setWorkDir(dir.getAbsolutePath());
-                        configService.saveConfig();
-
-                        if (clearContext) {
-                            claudeApiService.clearHistory(userId);
-                            ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n上下文已清空，新会话开始", contextToken);
-                        } else {
-                            ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n新请求将使用新目录（保留上下文）", contextToken);
-                        }
+                        ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath(), contextToken);
                     }
                 } else {
-                    ilinkService.sendText(userId, "用法: v-cd <路径> [mkdir] [clear] [force]\n- mkdir: 目录不存在时自动创建\n- clear: 清空上下文\n- force: 强制停止繁忙任务后切换（需与 clear 配合）", contextToken);
+                    ilinkService.sendText(userId, "用法: v-cd <路径> [mkdir] [clear] [force]\n- mkdir: 目录不存在时自动创建\n- clear: 清空当前会话\n- force: 强制停止繁忙任务后切换", contextToken);
                 }
             }
             case V_BLOCK -> { if (parts.length > 1) { String kw = String.join(" ", java.util.Arrays.copyOfRange(parts, 1, parts.length)); filterConfig.getBlockedKeywords().add(kw); configService.saveConfig(); ilinkService.sendText(userId, "已添加: " + kw, contextToken); } }
@@ -516,7 +517,7 @@ public class MessageRouter {
                 |------|------|
                 | `v-proc <序号>` | 切换到指定进程（同时切换会话和工作目录） |
                 | `v-fork` | 克隆当前进程，共享 session 和工作目录 |
-                | `v-newproc [session序号]` | 创建新独立进程，可选绑定 session |
+                | `v-newproc <session/路径>` | 创建新独立进程，绑定 session 或目录 |
                 | `v-delproc <序号>` | 删除指定进程（需先删除子进程） |
                 | `v-stop` | 停止当前进程的任务 |
                 | `v-stop <序号>` | 停止指定进程的任务 |
@@ -531,6 +532,7 @@ public class MessageRouter {
                 • `v-fork` 克隆当前进程作为子进程，共享 session 和工作目录
                 • 如果当前是子进程，克隆的进程会放在父进程下（不传递子进程）
                 • `v-newproc` 创建的是独立进程，不在任何进程组，不共享任务
+                • `v-newproc` 必须指定 session 序号/ID 或目录路径
                 • 进程组内可并行处理消息，全部忙碌时排队等待
                 • 父进程的 session 和工作目录变更会同步到子进程
                 • 进程空闲超时后自动销毁（默认24小时）
@@ -573,7 +575,7 @@ public class MessageRouter {
                 | `v-sessions` | 列出所有会话 |
                 | `v-session <序号或ID>` | 切换到指定会话 |
                 | `v-new` | 新建会话（销毁进程） |
-                | `v-clear [current/all] [keep-process]` | 清空会话（默认仅当前，keep-process 保留进程） |
+                | `v-clear [current/all] [destroy]` | 清空会话（默认仅当前，destroy 同时销毁进程） |
                 | `v-delete <id>` | 删除指定会话 |
                 | `v-disk-sessions` | 查看磁盘保存的会话 |
                 | `v-save <name>` | 保存当前配置为预设 |
@@ -970,32 +972,27 @@ public class MessageRouter {
     }
 
     private void handleClearCommand(String userId, String[] parts, String contextToken) {
-        // v-clear [current|all] [keep-process]
+        // v-clear [current|all] [destroy]
         boolean all = false;
-        boolean keepProcess = false;
+        boolean destroy = false;
         for (int i = 1; i < parts.length; i++) {
             if ("all".equalsIgnoreCase(parts[i])) all = true;
-            if ("keep-process".equalsIgnoreCase(parts[i])) keepProcess = true;
+            if ("destroy".equalsIgnoreCase(parts[i])) destroy = true;
         }
 
         if (all) {
-            if (keepProcess) {
-                claudeApiService.clearCurrentSession(userId);
-                ilinkService.sendText(userId, "所有会话已清空（进程已保留）", contextToken);
-            } else {
+            if (destroy) {
                 claudeApiService.clearHistory(userId);
-                ilinkService.sendText(userId, "会话已清空，进程已销毁", contextToken);
+                ilinkService.sendText(userId, "所有会话已清空，进程已销毁", contextToken);
+            } else {
+                // 仅清空所有 session，保留进程
+                claudeApiService.clearAllSessions(userId);
+                ilinkService.sendText(userId, "所有会话已清空（进程已保留）\n\n如需同时销毁进程，请使用 `v-clear all destroy`", contextToken);
             }
         } else {
-            // 默认 current：仅清除当前 session
-            if (keepProcess) {
-                claudeApiService.clearCurrentSession(userId);
-                ilinkService.sendText(userId, "当前会话已清空（进程已保留）", contextToken);
-            } else {
-                claudeApiService.clearCurrentSession(userId);
-                claudeApiService.destroyProcessGroup(userId);
-                ilinkService.sendText(userId, "当前会话已清空，进程已销毁", contextToken);
-            }
+            // 默认 current：仅清除当前 session，保留所有进程
+            claudeApiService.clearCurrentSession(userId);
+            ilinkService.sendText(userId, "当前会话已清空（进程已保留）", contextToken);
         }
     }
 
@@ -1007,29 +1004,48 @@ public class MessageRouter {
     }
 
     private void handleNewProcCommand(String userId, String[] parts, String contextToken) {
-        // v-newproc [session序号或ID]: 创建新独立进程（非克隆），可选绑定 session
-        String sessionId = null;
+        // v-newproc <session序号/ID | 目录路径>: 创建新独立进程
+        // 如果参数是 session 序号或 ID，绑定该 session 及其工作目录
+        // 如果参数是目录路径，绑定该目录，首次使用时自动创建 session
+        if (parts.length < 2) {
+            ilinkService.sendText(userId, "用法: v-newproc <session序号/ID | 目录路径>\n\n" +
+                    "• `v-newproc 2` — 绑定会话列表第2个会话\n" +
+                    "• `v-newproc <session-id>` — 绑定指定会话\n" +
+                    "• `v-newproc /path/to/dir` — 绑定目录，首次使用时自动创建会话", contextToken);
+            return;
+        }
 
-        if (parts.length >= 2) {
-            String target = parts[1];
-            // 尝试按序号匹配
+        String target = parts[1];
+
+        // 判断参数是 session 还是目录路径
+        // 如果以 / 开头或以 ~ 开头，视为目录路径
+        if (target.startsWith("/") || target.startsWith("~") || target.startsWith(".")) {
+            // 目录路径
+            java.io.File dir = new java.io.File(target).getAbsoluteFile();
+            if (!dir.exists() || !dir.isDirectory()) {
+                ilinkService.sendText(userId, "目录不存在: " + target, contextToken);
+                return;
+            }
+            String result = claudeApiService.createNewProcess(userId, null, dir.getAbsolutePath());
+            ilinkService.sendText(userId, result, contextToken);
+        } else {
+            // 尝试按 session 序号匹配
             try {
                 int index = Integer.parseInt(target) - 1;
                 java.util.List<String> history = claudeApiService.getSessionHistory(userId);
                 if (index >= 0 && index < history.size()) {
-                    sessionId = history.get(index);
+                    String sessionId = history.get(index);
+                    String result = claudeApiService.createNewProcess(userId, sessionId);
+                    ilinkService.sendText(userId, result, contextToken);
                 } else {
                     ilinkService.sendText(userId, "无效序号，范围: 1-" + history.size() + "\n使用 v-sessions 查看", contextToken);
-                    return;
                 }
             } catch (NumberFormatException e) {
                 // 不是数字，作为 sessionId 使用
-                sessionId = target;
+                String result = claudeApiService.createNewProcess(userId, target);
+                ilinkService.sendText(userId, result, contextToken);
             }
         }
-
-        String result = claudeApiService.createNewProcess(userId, sessionId);
-        ilinkService.sendText(userId, result, contextToken);
     }
 
     private void handleDelProcCommand(String userId, String[] parts, String contextToken) {

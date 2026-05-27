@@ -710,6 +710,19 @@ public class ClaudeApiService {
     }
 
     /**
+     * 获取当前进程组的忙碌进程数（排除独立进程）
+     */
+    public int getGroupBusyProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess p : pool) {
+            if (p.busy && !p.isIndependent) count++;
+        }
+        return count;
+    }
+
+    /**
      * 获取当前进程组的空闲进程数（排除独立进程）
      * 普通消息只会分配给进程组内的 worker，独立进程不会被使用
      */
@@ -876,6 +889,16 @@ public class ClaudeApiService {
      * 新进程不在任何进程组，不共享任务
      */
     public String createNewProcess(String userId, String sessionId) {
+        return createNewProcess(userId, sessionId, null);
+    }
+
+    /**
+     * 创建新独立进程（非克隆），可选绑定指定 session 和工作目录
+     * 新进程不在任何进程组，不共享任务
+     * @param sessionId 会话ID，null 表示不绑定会话
+     * @param workDir 工作目录，null 表示使用默认目录
+     */
+    public String createNewProcess(String userId, String sessionId, String workDir) {
         List<ClaudeProcess> pool = processPools.get(userId);
 
         // 检查进程数上限
@@ -905,10 +928,17 @@ public class ClaudeApiService {
             return "创建新进程失败";
         }
 
+        // 如果指定了工作目录，覆盖默认值
+        if (workDir != null) {
+            cp.workDir = workDir;
+        }
+
         // 尝试处理排队的消息
         processNextInQueue(userId);
 
-        return String.format("✅ 已创建新进程\n\n📋 工作目录: `%s`",
+        String sessionDisplay = cp.sessionId != null ? cp.sessionId.substring(0, Math.min(12, cp.sessionId.length())) + "..." : "首次使用时自动创建";
+        return String.format("✅ 已创建新进程\n\n📋 会话: `%s`\n📁 工作目录: `%s`",
+                sessionDisplay,
                 cp.workDir != null ? cp.workDir : "默认"
         );
     }
@@ -1225,6 +1255,23 @@ public class ClaudeApiService {
             }
         }
         sessionIds.remove(userId);
+        quotaManager.reset(userId);
+    }
+
+    /**
+     * 清除所有 session，但保留进程
+     */
+    public void clearAllSessions(String userId) {
+        List<String> sessions = sessionHistory.get(userId);
+        if (sessions != null) {
+            sessions.forEach(tokenUsageMap::remove);
+        }
+        String currentSession = sessionIds.get(userId);
+        if (currentSession != null) {
+            tokenUsageMap.remove(currentSession);
+        }
+        sessionIds.remove(userId);
+        sessionHistory.remove(userId);
         quotaManager.reset(userId);
     }
 
