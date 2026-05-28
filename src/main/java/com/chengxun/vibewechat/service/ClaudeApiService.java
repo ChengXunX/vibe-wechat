@@ -43,6 +43,9 @@ public class ClaudeApiService {
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
     // 每个进程独立的子任务队列（userId:processIndex -> Queue<subject>）
     private final Map<String, Queue<String>> subtaskQueues = new ConcurrentHashMap<>();
+    // 子任务进度计数器（userId:processIndex -> count）
+    private final Map<String, Integer> subtaskTotalCounters = new ConcurrentHashMap<>();
+    private final Map<String, Integer> subtaskCompletedCounters = new ConcurrentHashMap<>();
     // 追踪 tool_use ID -> toolName 的映射（用于匹配 tool_result）
     private final Map<String, String> pendingToolUseIds = new ConcurrentHashMap<>();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -680,14 +683,28 @@ public class ClaudeApiService {
                                 // Agent 的 task_notification 走 onToolResult（去重）
                                 if ("Agent".equals(matchedToolName)) {
                                     String summary = node.has("summary") ? node.get("summary").asText() : "";
-                                    toolCallback.onToolResult(userId, "Agent", toolUseId, summary, processIndex);
+                                    // 提取 Agent 进度信息
+                                    String progress = "";
+                                    if (node.has("completed") && node.has("total")) {
+                                        int completed = node.get("completed").asInt();
+                                        int total = node.get("total").asInt();
+                                        progress = " [" + completed + "/" + total + "]";
+                                    }
+                                    toolCallback.onToolResult(userId, "Agent", toolUseId, summary + progress, processIndex);
                                 } else {
                                     String summary = node.has("summary") ? node.get("summary").asText() : "";
                                     String taskStatus = node.has("status") ? node.get("status").asText() : "";
                                     boolean isCompleted = "completed".equals(taskStatus);
+                                    // 提取进度信息
+                                    String progress = "";
+                                    if (node.has("completed") && node.has("total")) {
+                                        int completed = node.get("completed").asInt();
+                                        int total = node.get("total").asInt();
+                                        progress = " [" + completed + "/" + total + "]";
+                                    }
                                     String statusText = isCompleted
-                                            ? "✅ 子任务完成" + (summary.isEmpty() ? "" : ": " + summary)
-                                            : "🔄 子任务 " + taskStatus + (summary.isEmpty() ? "" : ": " + summary);
+                                            ? "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary)
+                                            : "🔄 子任务 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
                                     toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
                                 }
                             } else if ("task_started".equals(subtype)) {
@@ -1545,18 +1562,25 @@ public class ClaudeApiService {
                         queue.offer(subject);
                         log.debug("Subtask queue[{}] offer: {}", queueKey, subject);
                     }
-                    yield "📋 创建子任务: " + subject;
+                    // 增加总计数
+                    subtaskTotalCounters.merge(queueKey, 1, Integer::sum);
+                    int total = subtaskTotalCounters.get(queueKey);
+                    int completed = subtaskCompletedCounters.getOrDefault(queueKey, 0);
+                    yield "📋 创建子任务 [" + completed + "/" + total + "]: " + subject;
                 }
                 case "TaskUpdate" -> {
                     String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
                     // 从队列头部获取 subject（不立即移除，等 completed 才移除）
                     String subject = queue.peek();
+                    int total = subtaskTotalCounters.getOrDefault(queueKey, 0);
+                    int completed = subtaskCompletedCounters.getOrDefault(queueKey, 0);
                     if ("completed".equals(status)) {
                         queue.poll();
+                        completed = subtaskCompletedCounters.merge(queueKey, 1, Integer::sum);
                         log.debug("Subtask queue[{}] poll: {}, remaining={}", queueKey, subject, queue.size());
-                        yield "✅ 子任务完成" + (subject == null || subject.isEmpty() ? "" : ": " + subject);
+                        yield "✅ 子任务完成 [" + completed + "/" + total + "]" + (subject == null || subject.isEmpty() ? "" : ": " + subject);
                     }
-                    yield "🔄 子任务 " + status + (subject == null || subject.isEmpty() ? "" : ": " + subject);
+                    yield "🔄 子任务 " + status + " [" + completed + "/" + total + "]" + (subject == null || subject.isEmpty() ? "" : ": " + subject);
                 }
                 case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
                 case "TaskList" -> "📋 列出所有子任务";
@@ -1577,6 +1601,14 @@ public class ClaudeApiService {
             // ignore
         }
         return false;
+    }
+
+    private void clearSubtaskProgress(String userId) {
+        // 清除该用户所有进程的子任务进度
+        subtaskQueues.entrySet().removeIf(e -> e.getKey().startsWith(userId + ":"));
+        subtaskTotalCounters.entrySet().removeIf(e -> e.getKey().startsWith(userId + ":"));
+        subtaskCompletedCounters.entrySet().removeIf(e -> e.getKey().startsWith(userId + ":"));
+        log.debug("Cleared subtask progress for user: {}", userId);
     }
 
     // ==================== 路径检测和配置加载 ====================
@@ -1693,6 +1725,7 @@ public class ClaudeApiService {
         sessionHistory.remove(userId);
         quotaManager.reset(userId);
         destroyProcessGroup(userId);
+        clearSubtaskProgress(userId);
     }
 
     /**
@@ -1722,6 +1755,7 @@ public class ClaudeApiService {
                 }
             }
         }
+        clearSubtaskProgress(userId);
     }
 
     /**
@@ -1741,6 +1775,7 @@ public class ClaudeApiService {
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
         quotaManager.reset(userId);
+        clearSubtaskProgress(userId);
     }
 
     public String getSessionId(String userId) {
