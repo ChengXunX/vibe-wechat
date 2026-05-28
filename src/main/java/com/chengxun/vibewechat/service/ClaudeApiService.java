@@ -15,7 +15,9 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -39,7 +41,10 @@ public class ClaudeApiService {
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
-    private final Map<String, String> subtaskNames = new ConcurrentHashMap<>();
+    // 每个进程独立的子任务队列（userId:processIndex -> Queue<subject>）
+    private final Map<String, Queue<String>> subtaskQueues = new ConcurrentHashMap<>();
+    // 追踪 tool_use ID -> toolName 的映射（用于匹配 tool_result）
+    private final Map<String, String> pendingToolUseIds = new ConcurrentHashMap<>();
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
     // 上下文压缩记忆文档（sessionId -> 文件路径）
@@ -558,10 +563,14 @@ public class ClaudeApiService {
                                     } else if ("tool_use".equals(itemType)) {
                                         String toolName = item.get("name").asText();
                                         String toolInput = item.get("input").toString();
+                                        String toolUseId = item.has("id") ? item.get("id").asText() : null;
+                                        if (toolUseId != null) {
+                                            pendingToolUseIds.put(toolUseId, toolName);
+                                        }
                                         if (toolCallback != null) {
                                             toolCallback.onToolUse(userId, toolName, toolInput, processIndex);
                                             if (isSubtaskTool(toolName)) {
-                                                String subtaskStatus = extractSubtaskStatus(toolName, toolInput);
+                                                String subtaskStatus = extractSubtaskStatus(toolName, toolInput, userId, processIndex);
                                                 if (subtaskStatus != null) {
                                                     boolean isCompleted = isSubtaskCompleted(toolName, toolInput);
                                                     toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted, processIndex);
@@ -592,6 +601,36 @@ public class ClaudeApiService {
                         }
                         output.append("⚠️ Claude API 错误: ").append(errorMsg).append("\n");
                         log.error("Claude API error for user {}: {}", userId, errorMsg);
+                    } else if ("user".equals(type)) {
+                        // 处理 tool_result 事件，根据 tool_use_id 匹配对应的工具
+                        com.fasterxml.jackson.databind.JsonNode messageNode = node.get("message");
+                        if (messageNode != null) {
+                            com.fasterxml.jackson.databind.JsonNode contentNode = messageNode.get("content");
+                            if (contentNode != null && contentNode.isArray()) {
+                                for (com.fasterxml.jackson.databind.JsonNode item : contentNode) {
+                                    if (item.has("type") && "tool_result".equals(item.get("type").asText())) {
+                                        String toolUseId = item.has("tool_use_id") ? item.get("tool_use_id").asText() : null;
+                                        String toolName = toolUseId != null ? pendingToolUseIds.remove(toolUseId) : null;
+                                        if (toolName != null && toolCallback != null) {
+                                            String result = "";
+                                            if (item.has("content")) {
+                                                com.fasterxml.jackson.databind.JsonNode resultContent = item.get("content");
+                                                if (resultContent.isTextual()) {
+                                                    result = resultContent.asText();
+                                                } else if (resultContent.isArray()) {
+                                                    StringBuilder sb = new StringBuilder();
+                                                    for (com.fasterxml.jackson.databind.JsonNode rc : resultContent) {
+                                                        if (rc.has("text")) sb.append(rc.get("text").asText());
+                                                    }
+                                                    result = sb.toString();
+                                                }
+                                            }
+                                            toolCallback.onToolResult(userId, toolName, toolUseId, result, processIndex);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     } else if ("result".equals(type)) {
                         // 保存 session_id
                         com.fasterxml.jackson.databind.JsonNode sessionNode = node.get("session_id");
@@ -632,6 +671,30 @@ public class ClaudeApiService {
 
                         // 收到 result，退出循环
                         break;
+                    } else if ("system".equals(type)) {
+                        String subtype = node.has("subtype") ? node.get("subtype").asText() : "";
+                        if (toolCallback != null) {
+                            if ("task_notification".equals(subtype)) {
+                                String toolUseId = node.has("tool_use_id") ? node.get("tool_use_id").asText() : null;
+                                String matchedToolName = toolUseId != null ? pendingToolUseIds.get(toolUseId) : null;
+                                // Agent 的 task_notification 走 onToolResult（去重）
+                                if ("Agent".equals(matchedToolName)) {
+                                    String summary = node.has("summary") ? node.get("summary").asText() : "";
+                                    toolCallback.onToolResult(userId, "Agent", toolUseId, summary, processIndex);
+                                } else {
+                                    String summary = node.has("summary") ? node.get("summary").asText() : "";
+                                    String taskStatus = node.has("status") ? node.get("status").asText() : "";
+                                    boolean isCompleted = "completed".equals(taskStatus);
+                                    String statusText = isCompleted
+                                            ? "✅ 子任务完成" + (summary.isEmpty() ? "" : ": " + summary)
+                                            : "🔄 子任务 " + taskStatus + (summary.isEmpty() ? "" : ": " + summary);
+                                    toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
+                                }
+                            } else if ("task_started".equals(subtype)) {
+                                String description = node.has("description") ? node.get("description").asText() : "";
+                                toolCallback.onSubtaskStatus(userId, "📋 子任务开始" + (description.isEmpty() ? "" : ": " + description), false, processIndex);
+                            }
+                        }
                     }
                 } catch (Exception e) {
                     // 非 JSON 行，可能是纯文本输出
@@ -1454,7 +1517,7 @@ public class ClaudeApiService {
 
     public interface ToolCallback {
         void onToolUse(String userId, String toolName, String toolInput, int processIndex);
-        void onToolResult(String userId, String result);
+        void onToolResult(String userId, String toolName, String toolUseId, String result, int processIndex);
         void onSubtaskStatus(String userId, String status, boolean isCompleted, int processIndex);
         void onDecisionMessage(String userId, String message);
     }
@@ -1470,35 +1533,30 @@ public class ClaudeApiService {
                 || "TaskGet".equals(toolName) || "TaskList".equals(toolName);
     }
 
-    private String extractSubtaskStatus(String toolName, String toolInput) {
+    private String extractSubtaskStatus(String toolName, String toolInput, String userId, int processIndex) {
         try {
+            String queueKey = userId + ":" + processIndex;
+            Queue<String> queue = subtaskQueues.computeIfAbsent(queueKey, k -> new LinkedList<>());
             com.fasterxml.jackson.databind.JsonNode inputNode = objectMapper.readTree(toolInput);
             return switch (toolName) {
                 case "TaskCreate" -> {
                     String subject = inputNode.has("subject") ? inputNode.get("subject").asText() : "";
-                    String taskId = inputNode.has("taskId") ? inputNode.get("taskId").asText() : null;
-                    // taskId 为 null 时（正常情况），用 subject 本身作为后备 key
                     if (!subject.isEmpty()) {
-                        subtaskNames.put(subject, subject);
-                    }
-                    if (taskId != null && !subject.isEmpty()) {
-                        subtaskNames.put(taskId, subject);
+                        queue.offer(subject);
+                        log.debug("Subtask queue[{}] offer: {}", queueKey, subject);
                     }
                     yield "📋 创建子任务: " + subject;
                 }
                 case "TaskUpdate" -> {
                     String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
-                    String taskId = inputNode.has("taskId") ? inputNode.get("taskId").asText() : "";
-                    // 从缓存获取 subject：先用 taskId 查，再用 subject 本身查
-                    String subject = !taskId.isEmpty() ? subtaskNames.getOrDefault(taskId, "") : "";
-                    if (subject.isEmpty() && inputNode.has("subject")) {
-                        String inputSubject = inputNode.get("subject").asText();
-                        subject = subtaskNames.getOrDefault(inputSubject, inputSubject);
-                    }
+                    // 从队列头部获取 subject（不立即移除，等 completed 才移除）
+                    String subject = queue.peek();
                     if ("completed".equals(status)) {
-                        yield "✅ 子任务完成" + (subject.isEmpty() ? "" : ": " + subject);
+                        queue.poll();
+                        log.debug("Subtask queue[{}] poll: {}, remaining={}", queueKey, subject, queue.size());
+                        yield "✅ 子任务完成" + (subject == null || subject.isEmpty() ? "" : ": " + subject);
                     }
-                    yield "🔄 子任务 " + status + (subject.isEmpty() ? "" : ": " + subject);
+                    yield "🔄 子任务 " + status + (subject == null || subject.isEmpty() ? "" : ": " + subject);
                 }
                 case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
                 case "TaskList" -> "📋 列出所有子任务";

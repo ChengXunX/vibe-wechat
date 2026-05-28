@@ -172,12 +172,17 @@ public class IlInkConnectionHandler {
             return;
         }
 
-        // 计算预留配额：当前消息数 + 等待结果的进程数 >= 10 时追加警告
-        int reservedQuota = quotaManager.getReservedQuota(userId);
+        // 计算预留配额：每个忙碌进程占一条配额，最多预留9条（至少保留1条通知）
+        int runningProcesses = quotaManager.getRunningProcesses(userId);
+        int reservedQuota = Math.min(runningProcesses, MESSAGE_LIMIT - 1);
         int remaining = MESSAGE_LIMIT - currentCount - reservedQuota;
         String finalText = text;
         if (!isUnlimitedType && remaining <= 1) {
-            finalText = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（已用 " + currentCount + " + 预留 " + reservedQuota + " = " + (currentCount + reservedQuota) + "/" + MESSAGE_LIMIT + "）**\n> 剩余: " + remaining + " 条\n> 后续工具通知将被屏蔽\n> 发送 `v-refresh` 可刷新配额以接收更多通知";
+            String warning = text + "\n\n---\n> ⚠️ **微信消息次数即将达到上限（已用 " + currentCount + " + 预留 " + reservedQuota + " = " + (currentCount + reservedQuota) + "/" + MESSAGE_LIMIT + "）**\n> 剩余: " + remaining + " 条\n> 后续工具通知将被屏蔽\n> 发送 `v-refresh` 可刷新配额以接收更多通知";
+            if (runningProcesses >= MESSAGE_LIMIT - 1) {
+                warning += "\n\n> ⚠️ **当前忙碌进程数过多（" + runningProcesses + "个），建议在收到任意消息后使用 `v-refresh` 命令释放配额**";
+            }
+            finalText = warning;
         }
 
         try {

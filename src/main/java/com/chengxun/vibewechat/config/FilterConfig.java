@@ -20,6 +20,9 @@ public class FilterConfig {
     private boolean showTokenUsage = true;
     private boolean showMessageStatus = false;
     private boolean showSubtaskStatus = true;
+    private boolean showAgentCalls = false;
+    private boolean showAgentCompletion = true;
+    private boolean showPlanMode = true;
     private int maxMessagesPerUser = 10;
     private List<String> blockedKeywords = new CopyOnWriteArrayList<>();
 }

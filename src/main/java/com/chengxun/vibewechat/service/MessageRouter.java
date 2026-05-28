@@ -35,6 +35,8 @@ public class MessageRouter {
 
     private final Map<String, String> userContextTokens = new ConcurrentHashMap<>();
     private final Map<String, Thread> activeTypingThreads = new ConcurrentHashMap<>();
+    // 记录已发送完成通知的 tool_use_id（task_notification 和 tool_result 去重）
+    private final java.util.Set<String> completedToolUseIds = ConcurrentHashMap.newKeySet();
 
     private static final String V_PREFIX = "v-";
     private static final String V_HELP = "v-help";
@@ -65,6 +67,9 @@ public class MessageRouter {
     private static final String V_DELETE = "v-delete";
     private static final String V_SUBTASK = "v-subtask";
     private static final String V_SUBTASK_DONE = "v-subtask-done";
+    private static final String V_AGENT = "v-agent";
+    private static final String V_AGENT_DONE = "v-agent-done";
+    private static final String V_PLAN = "v-plan";
     private static final String V_PROCESSES = "v-processes";
     private static final String V_MAXPROC = "v-maxproc";
     private static final String V_IDLE = "v-idle";
@@ -148,6 +153,38 @@ public class MessageRouter {
                     return;
                 }
 
+                String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
+
+                // Agent 工具
+                if ("Agent".equals(toolName)) {
+                    if (!filterConfig.isShowAgentCalls()) return;
+                    if (!quotaManager.canSendToolMessage(userId)) return;
+                    String contextToken = userContextTokens.get(userId);
+                    String subagentType = "";
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode inputNode = new com.fasterxml.jackson.databind.ObjectMapper().readTree(toolInput);
+                        subagentType = inputNode.has("subagent_type") ? inputNode.get("subagent_type").asText() : "";
+                    } catch (Exception ignored) {}
+                    String typeInfo = subagentType.isEmpty() ? "" : " `" + subagentType + "`";
+                    ilinkService.sendText(userId, "> 🤖 **Agent**" + typeInfo + procTag, contextToken != null ? contextToken : "", "tool");
+                    quotaManager.recordMessageSent(userId, "tool");
+                    return;
+                }
+
+                // PlanMode 工具
+                if ("EnterPlanMode".equals(toolName) || "ExitPlanMode".equals(toolName)) {
+                    if (!filterConfig.isShowPlanMode()) return;
+                    if (!quotaManager.canSendToolMessage(userId)) return;
+                    String contextToken = userContextTokens.get(userId);
+                    if ("EnterPlanMode".equals(toolName)) {
+                        ilinkService.sendText(userId, "> 📋 **进入规划模式**" + procTag, contextToken != null ? contextToken : "", "tool");
+                    } else {
+                        ilinkService.sendText(userId, "> ✅ **退出规划模式**" + procTag, contextToken != null ? contextToken : "", "tool");
+                    }
+                    quotaManager.recordMessageSent(userId, "tool");
+                    return;
+                }
+
                 // 根据工具类型检查对应的过滤开关
                 boolean allowed = false;
                 if (isFileReadTool(toolName)) {
@@ -168,25 +205,40 @@ public class MessageRouter {
 
                 String contextToken = userContextTokens.get(userId);
                 String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
-                String procTag = processIndex > 0 ? " [进程" + processIndex + "]" : "";
-                String prefix;
-                if (isFileReadTool(toolName)) {
-                    prefix = "📖 文件读取";
-                } else if (isFileEditTool(toolName)) {
-                    prefix = "✏️ 文件编辑";
-                } else {
-                    prefix = "🔧 工具调用";
+                if (cleanInput.length() > 300) {
+                    cleanInput = cleanInput.substring(0, 300) + "...";
                 }
-                ilinkService.sendText(userId, prefix + ": " + toolName + procTag + "\n" + cleanInput, contextToken != null ? contextToken : "", "tool");
+                String msg;
+                if (isFileReadTool(toolName)) {
+                    msg = "> 📖 **文件读取** `" + toolName + "`" + procTag
+                            + "\n```\n" + cleanInput + "\n```";
+                } else if (isFileEditTool(toolName)) {
+                    msg = "> ✏️ **文件编辑** `" + toolName + "`" + procTag
+                            + "\n```\n" + cleanInput + "\n```";
+                } else {
+                    msg = "> 🔧 **工具调用** `" + toolName + "`" + procTag
+                            + "\n```\n" + cleanInput + "\n```";
+                }
+                ilinkService.sendText(userId, msg, contextToken != null ? contextToken : "", "tool");
                 quotaManager.recordMessageSent(userId, "tool");
             }
 
             @Override
-            public void onToolResult(String userId, String result) {
-                if (filterConfig.isShowToolCalls()) {
+            public void onToolResult(String userId, String toolName, String toolUseId, String result, int processIndex) {
+                // Agent 完成通知（去重：task_notification 和 tool_result 只发一次）
+                if ("Agent".equals(toolName)) {
+                    if (!filterConfig.isShowAgentCompletion()) return;
+                    if (completedToolUseIds.contains(toolUseId)) return;
+                    completedToolUseIds.add(toolUseId);
                     if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
-                    ilinkService.sendText(userId, "📋 工具结果: " + result, contextToken != null ? contextToken : "", "sub_result");
+                    String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
+                    String summary = result.length() > 200 ? result.substring(0, 200) + "..." : result;
+                    String msg = "> 🤖 **Agent 完成**" + procTag;
+                    if (!summary.isEmpty()) {
+                        msg += "\n> " + summary;
+                    }
+                    ilinkService.sendText(userId, msg, contextToken != null ? contextToken : "", "sub_result");
                     quotaManager.recordMessageSent(userId, "sub_result");
                 }
             }
@@ -199,8 +251,8 @@ public class MessageRouter {
                     String messageType = isCompleted ? "subtask_completion" : "sub_result";
                     // 子任务完成消息不消耗配额，其他子任务消息消耗配额
                     if (!isCompleted && !quotaManager.canSendToolMessage(userId)) return;
-                    String procTag = processIndex > 0 ? " [进程" + processIndex + "]" : "";
-                    ilinkService.sendText(userId, status + procTag, contextToken != null ? contextToken : "", messageType);
+                    String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
+                    ilinkService.sendText(userId, "> " + status + procTag, contextToken != null ? contextToken : "", messageType);
                     if (!isCompleted) {
                         quotaManager.recordMessageSent(userId, messageType);
                     }
@@ -384,6 +436,9 @@ public class MessageRouter {
             case V_FILEEDIT -> handleQuickToggle(userId, "fileedit", parts, contextToken);
             case V_SUBTASK -> handleQuickToggle(userId, "subtask", parts, contextToken);
             case V_SUBTASK_DONE -> handleQuickToggle(userId, "subtask-done", parts, contextToken);
+            case V_AGENT -> handleQuickToggle(userId, "agent", parts, contextToken);
+            case V_AGENT_DONE -> handleQuickToggle(userId, "agent-done", parts, contextToken);
+            case V_PLAN -> handleQuickToggle(userId, "plan", parts, contextToken);
             case V_TOKEN -> {
                 if (parts.length > 1) {
                     handleQuickToggle(userId, "token", parts, contextToken);
@@ -475,7 +530,14 @@ public class MessageRouter {
             case V_FORK -> handleForkCommand(userId, parts, contextToken);
             case V_NEWPROC -> handleNewProcCommand(userId, parts, contextToken);
             case V_DELPROC -> handleDelProcCommand(userId, parts, contextToken);
-            case V_REFRESH -> ilinkService.sendText(userId, "✅ 已刷新配额\n\n本条消息也占一条配额", contextToken);
+            case V_REFRESH -> {
+                int busyCount = claudeApiService.getBusyProcessCount(userId);
+                String refreshMsg = "✅ 已刷新配额\n\n本条消息也占一条配额";
+                if (busyCount >= 9) {
+                    refreshMsg += "\n\n⚠️ 当前有 " + busyCount + " 个忙碌进程，每个进程仍需占用一条配额用于返回结果，实际可用配额不足。建议等待部分任务完成后再发送新消息。";
+                }
+                ilinkService.sendText(userId, refreshMsg, contextToken);
+            }
             default -> ilinkService.sendText(userId, "未知命令: " + cmd + "\n输入 v-help 查看所有命令", contextToken);
         }
     }
@@ -610,6 +672,9 @@ public class MessageRouter {
                 | `v-fileedit <true/false>` | 文件编辑通知 |
                 | `v-subtask <true/false>` | 子任务状态通知 |
                 | `v-subtask-done <true/false>` | 子任务完成通知 |
+                | `v-agent <true/false>` | Agent 开始通知 |
+                | `v-agent-done <true/false>` | Agent 完成通知 |
+                | `v-plan <true/false>` | 规划模式通知 |
                 | `v-token` | 查看/开关 Token 统计 |
 
                 ---
@@ -675,9 +740,18 @@ public class MessageRouter {
 
                 **🔔 通知配置**
 
-                | 消息状态 | 工具调用 | 文件读取 | 文件编辑 | 子任务状态 | 子任务完成 | 任务完成 | Token 统计 |
-                |----------|----------|----------|----------|------------|------------|----------|------------|
-                | %s | %s | %s | %s | %s | %s | %s | %s |
+                | 通知类型 | 状态 | 命令 |
+                |----------|------|------|
+                | 消息状态 | %s | `v-notify` |
+                | 工具调用 | %s | `v-tools` |
+                | 文件读取 | %s | `v-fileread` |
+                | 文件编辑 | %s | `v-fileedit` |
+                | 子任务状态 | %s | `v-subtask` |
+                | 子任务完成 | %s | `v-subtask-done` |
+                | Agent 开始 | %s | `v-agent` |
+                | Agent 完成 | %s | `v-agent-done` |
+                | 规划模式 | %s | `v-plan` |
+                | Token 统计 | %s | `v-token` |
                 """,
                 claudeApiService.getApiUrl() != null ? claudeApiService.getApiUrl() : "未设置",
                 claudeApiService.getModel() != null ? claudeApiService.getModel() : "未设置",
@@ -699,14 +773,16 @@ public class MessageRouter {
                 formatTokens(usage.getOutputTokens()),
                 formatTokens(usage.getTotalTokens()),
                 filterConfig.getBlockedKeywords().size(),
-                filterConfig.isShowMessageStatus() ? "✅" : "❌",
-                filterConfig.isShowToolCalls() ? "✅" : "❌",
-                filterConfig.isShowFileRead() ? "✅" : "❌",
-                filterConfig.isShowFileEdit() ? "✅" : "❌",
-                filterConfig.isShowSubtaskStatus() ? "✅" : "❌",
-                filterConfig.isShowSubtaskCompletion() ? "✅" : "❌",
-                filterConfig.isShowTaskCompletion() ? "✅" : "❌",
-                filterConfig.isShowTokenUsage() ? "✅" : "❌");
+                filterConfig.isShowMessageStatus() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowToolCalls() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowFileRead() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowFileEdit() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowSubtaskStatus() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowSubtaskCompletion() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowAgentCalls() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowAgentCompletion() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowPlanMode() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowTokenUsage() ? "✅ 开" : "❌ 关");
         ilinkService.sendText(userId, status, contextToken);
     }
 
@@ -758,6 +834,9 @@ public class MessageRouter {
             case "subtask" -> filterConfig.setShowSubtaskStatus(newValue);
             case "subtask-done" -> filterConfig.setShowSubtaskCompletion(newValue);
             case "token" -> filterConfig.setShowTokenUsage(newValue);
+            case "agent" -> filterConfig.setShowAgentCalls(newValue);
+            case "agent-done" -> filterConfig.setShowAgentCompletion(newValue);
+            case "plan" -> filterConfig.setShowPlanMode(newValue);
         }
         configService.saveConfig();
         ilinkService.sendText(userId, type + " = " + (newValue ? "on" : "off"), contextToken);

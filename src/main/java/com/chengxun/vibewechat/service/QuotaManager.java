@@ -69,6 +69,14 @@ public class QuotaManager {
         }
     }
 
+    public int getRunningProcesses(String userId) {
+        QuotaState q = quotas.get(userId);
+        if (q == null) return 0;
+        synchronized (q) {
+            return q.runningProcesses;
+        }
+    }
+
     public void recordMessageSent(String userId, String messageType) {
         QuotaState q = quotas.computeIfAbsent(userId, k -> new QuotaState());
         synchronized (q) {
@@ -106,8 +114,9 @@ public class QuotaManager {
         if (q == null) return "无数据";
         synchronized (q) {
             int available = q.getAvailable();
+            int reserved = Math.min(q.runningProcesses, MESSAGE_LIMIT - 1);
             return String.format("已用:%d, 预留:%d, 可用:%d (共10条)",
-                    q.totalUsed, q.reservedForResult, available);
+                    q.totalUsed, reserved, available);
         }
     }
 }
