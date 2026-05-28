@@ -141,7 +141,7 @@ public class MessageRouter {
     public void init() {
         claudeApiService.setToolCallback(new ClaudeApiService.ToolCallback() {
             @Override
-            public void onToolUse(String userId, String toolName, String toolInput) {
+            public void onToolUse(String userId, String toolName, String toolInput, int processIndex) {
                 // 子任务工具有独立通知，跳过工具调用通知避免重复
                 if ("TaskCreate".equals(toolName) || "TaskUpdate".equals(toolName)
                         || "TaskGet".equals(toolName) || "TaskList".equals(toolName)) {
@@ -168,6 +168,7 @@ public class MessageRouter {
 
                 String contextToken = userContextTokens.get(userId);
                 String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
+                String procTag = processIndex > 0 ? " [进程" + processIndex + "]" : "";
                 String prefix;
                 if (isFileReadTool(toolName)) {
                     prefix = "📖 文件读取";
@@ -176,7 +177,7 @@ public class MessageRouter {
                 } else {
                     prefix = "🔧 工具调用";
                 }
-                ilinkService.sendText(userId, prefix + ": " + toolName + "\n" + cleanInput, contextToken != null ? contextToken : "", "tool");
+                ilinkService.sendText(userId, prefix + ": " + toolName + procTag + "\n" + cleanInput, contextToken != null ? contextToken : "", "tool");
                 quotaManager.recordMessageSent(userId, "tool");
             }
 
@@ -191,14 +192,15 @@ public class MessageRouter {
             }
 
             @Override
-            public void onSubtaskStatus(String userId, String status, boolean isCompleted) {
+            public void onSubtaskStatus(String userId, String status, boolean isCompleted, int processIndex) {
                 boolean shouldNotify = isCompleted ? filterConfig.isShowSubtaskCompletion() : filterConfig.isShowSubtaskStatus();
                 if (shouldNotify) {
                     String contextToken = userContextTokens.get(userId);
                     String messageType = isCompleted ? "subtask_completion" : "sub_result";
                     // 子任务完成消息不消耗配额，其他子任务消息消耗配额
                     if (!isCompleted && !quotaManager.canSendToolMessage(userId)) return;
-                    ilinkService.sendText(userId, status, contextToken != null ? contextToken : "", messageType);
+                    String procTag = processIndex > 0 ? " [进程" + processIndex + "]" : "";
+                    ilinkService.sendText(userId, status + procTag, contextToken != null ? contextToken : "", messageType);
                     if (!isCompleted) {
                         quotaManager.recordMessageSent(userId, messageType);
                     }
@@ -254,12 +256,11 @@ public class MessageRouter {
             int busyCount = claudeApiService.getBusyProcessCount(userId);
             int groupProcessCount = claudeApiService.getGroupProcessCount(userId);
 
-            // 根据进程组状态显示不同的处理提示（仅统计进程组内空闲，排除独立进程）
-            int groupIdleCount = claudeApiService.getGroupIdleProcessCount(userId);
+            // 根据是否已分配进程显示不同的处理提示
+            // 注意：sendMessageWithIndex 已将分配的进程标记为 busy，显示时需加回来
             String statusHint;
-            if (processCount == 0) {
-                statusHint = "\n⚡ 首次使用，正在创建进程并处理任务...";
-            } else if (groupIdleCount > 0) {
+            if (assignedProcessIndex > 0) {
+                int groupIdleCount = claudeApiService.getGroupIdleProcessCount(userId) + 1;
                 statusHint = "\n🚀 开始处理任务（组内空闲进程: " + groupIdleCount + "）";
             } else {
                 statusHint = "\n⏳ 进入等待队列（忙碌进程: " + busyCount + "/" + processCount + "）";
@@ -319,20 +320,20 @@ public class MessageRouter {
                 response = "Claude 未返回结果，请检查日志或稍后重试";
             }
 
-            String processPrefix = assignedProcessIndex > 0 ? "[#" + assignedProcessIndex + "] " : "";
+            String processTag = assignedProcessIndex > 0 ? "\n\n> 📍 由进程 #" + assignedProcessIndex + " 执行" : "";
 
             if (!blocked) {
                 if (filterConfig.isShowTaskCompletion()) {
                     String taskSummary = claudeApiService.getTaskSummary(userId, message);
                     String statsSummary = claudeApiService.getTaskCompletionSummary(userId, duration, response);
-                    String fullResponse = processPrefix + "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary;
+                    String fullResponse = "✅ 任务完成 | " + taskSummary + "\n\n---\n" + response + "\n\n" + statsSummary + processTag;
                     ilinkService.sendText(userId, fullResponse, contextToken, "result");
                 } else {
                     ilinkService.sendText(userId, response, contextToken, "result");
                 }
             } else {
                 if (filterConfig.isShowTaskCompletion()) {
-                    ilinkService.sendText(userId, processPrefix + "✅ 任务完成（内容被关键词过滤）", contextToken, "result");
+                    ilinkService.sendText(userId, "✅ 任务完成（内容被关键词过滤）" + processTag, contextToken, "result");
                 }
             }
         } catch (Exception e) {

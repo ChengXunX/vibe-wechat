@@ -455,6 +455,7 @@ public class ClaudeApiService {
 
     private String processMessage(ClaudeProcess cp, String userId, String message) {
         long startTime = System.currentTimeMillis();
+        int processIndex = getProcessIndex(userId, cp);
 
         try {
             // 检查 CLI 进程是否还活着
@@ -536,12 +537,12 @@ public class ClaudeApiService {
                                         String toolName = item.get("name").asText();
                                         String toolInput = item.get("input").toString();
                                         if (toolCallback != null) {
-                                            toolCallback.onToolUse(userId, toolName, toolInput);
+                                            toolCallback.onToolUse(userId, toolName, toolInput, processIndex);
                                             if (isSubtaskTool(toolName)) {
                                                 String subtaskStatus = extractSubtaskStatus(toolName, toolInput);
                                                 if (subtaskStatus != null) {
                                                     boolean isCompleted = isSubtaskCompleted(toolName, toolInput);
-                                                    toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted);
+                                                    toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted, processIndex);
                                                 }
                                             }
                                         }
@@ -1228,9 +1229,9 @@ public class ClaudeApiService {
     // ==================== 工具调用回调 ====================
 
     public interface ToolCallback {
-        void onToolUse(String userId, String toolName, String toolInput);
+        void onToolUse(String userId, String toolName, String toolInput, int processIndex);
         void onToolResult(String userId, String result);
-        void onSubtaskStatus(String userId, String status, boolean isCompleted);
+        void onSubtaskStatus(String userId, String status, boolean isCompleted, int processIndex);
         void onDecisionMessage(String userId, String message);
     }
 
