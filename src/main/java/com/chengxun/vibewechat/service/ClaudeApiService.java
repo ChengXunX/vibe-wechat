@@ -39,6 +39,10 @@ public class ClaudeApiService {
 
     // 会话管理（tokenUsageMap 按 sessionId 统计，确保切换 session 后数据独立）
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
+    // 累积 token 统计（userId -> 总用量，跨 session 不清除，含摘要生成消耗）
+    private final Map<String, TokenUsage> cumulativeTokenUsage = new ConcurrentHashMap<>();
+    // 上下文显示比例（sessionId -> 压缩后的百分比，/compact 后覆盖显示）
+    private final Map<String, Integer> contextDisplayPercent = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
     // 每个进程独立的子任务队列（userId:processIndex -> Queue<subject>）
@@ -52,6 +56,8 @@ public class ClaudeApiService {
 
     // 上下文压缩记忆文档（sessionId -> 文件路径）
     private final Map<String, String> memoryDocuments = new ConcurrentHashMap<>();
+    // 已触发过 /compact 的 sessionId（第二次触发阈值时才保存记忆文档）
+    private final java.util.Set<String> compactedSessions = ConcurrentHashMap.newKeySet();
 
     // 进程 ID 生成器
     private static final java.util.concurrent.atomic.AtomicLong processIdGenerator = new java.util.concurrent.atomic.AtomicLong(0);
@@ -670,6 +676,9 @@ public class ClaudeApiService {
                                 TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(currentSessionId, k -> new TokenUsage());
                                 tokenUsage.add(inputTokens, outputTokens);
                             }
+                            // 累积统计（不清除）
+                            TokenUsage cumulative = cumulativeTokenUsage.computeIfAbsent(userId, k -> new TokenUsage());
+                            cumulative.add(inputTokens, outputTokens);
                         }
 
                         // 收到 result，退出循环
@@ -1714,12 +1723,16 @@ public class ClaudeApiService {
         List<String> sessions = sessionHistory.get(userId);
         if (sessions != null) {
             sessions.forEach(tokenUsageMap::remove);
-            sessions.forEach(memoryDocuments::remove); // 清理记忆文档绑定
+            sessions.forEach(memoryDocuments::remove);
+            sessions.forEach(compactedSessions::remove);
+            sessions.forEach(contextDisplayPercent::remove);
         }
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
-            memoryDocuments.remove(currentSession); // 清理记忆文档绑定
+            memoryDocuments.remove(currentSession);
+            compactedSessions.remove(currentSession);
+            contextDisplayPercent.remove(currentSession);
         }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
@@ -1736,6 +1749,8 @@ public class ClaudeApiService {
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
             memoryDocuments.remove(currentSession);
+            compactedSessions.remove(currentSession);
+            contextDisplayPercent.remove(currentSession);
             List<String> history = sessionHistory.get(userId);
             if (history != null) {
                 history.remove(currentSession);
@@ -1765,12 +1780,16 @@ public class ClaudeApiService {
         List<String> sessions = sessionHistory.get(userId);
         if (sessions != null) {
             sessions.forEach(tokenUsageMap::remove);
-            sessions.forEach(memoryDocuments::remove); // 清理记忆文档绑定
+            sessions.forEach(memoryDocuments::remove);
+            sessions.forEach(compactedSessions::remove);
+            sessions.forEach(contextDisplayPercent::remove);
         }
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
-            memoryDocuments.remove(currentSession); // 清理记忆文档绑定
+            memoryDocuments.remove(currentSession);
+            compactedSessions.remove(currentSession);
+            contextDisplayPercent.remove(currentSession);
         }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
@@ -1820,11 +1839,189 @@ public class ClaudeApiService {
                 sessionIds.remove(userId);
                 destroyProcessGroup(userId);
             }
-            // 清理记忆文档绑定
             memoryDocuments.remove(sessionId);
+            compactedSessions.remove(sessionId);
+            contextDisplayPercent.remove(sessionId);
             return true;
         }
         return false;
+    }
+
+    // ==================== 上下文压缩 ====================
+
+    /**
+     * 调用 Claude CLI 的 /compact 命令压缩 session 内部上下文（阻塞调用）
+     * 独立进程，使用 --resume 恢复 session 后执行 /compact
+     * @param sessionId 要压缩的 session ID
+     * @return 是否成功
+     */
+    private boolean compactSession(String sessionId) {
+        String installPath = claudeConfig.getInstallPath();
+        if (installPath == null || installPath.isEmpty()) {
+            return false;
+        }
+
+        try {
+            List<String> command = new ArrayList<>();
+            command.add(installPath);
+            command.add("--print");
+            command.add("--input-format");
+            command.add("text");
+            command.add("--output-format");
+            command.add("text");
+            command.add("--resume");
+            command.add(sessionId);
+
+            String model = claudeConfig.getModel();
+            if (model != null && !model.isEmpty()) {
+                command.add("--model");
+                command.add(model);
+            }
+
+            String workDir = claudeConfig.getWorkDir();
+            if (workDir == null || workDir.isEmpty()) {
+                workDir = System.getProperty("user.dir");
+            }
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(false);
+            if (workDir != null && !workDir.isEmpty()) {
+                pb.directory(new java.io.File(workDir));
+            }
+
+            Process process = pb.start();
+            process.getOutputStream().write("/compact\n".getBytes());
+            process.getOutputStream().flush();
+            process.getOutputStream().close();
+
+            // 读取输出（忽略，只等完成）
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                while (reader.readLine() != null) { /* drain */ }
+            }
+
+            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("Session /compact timed out for session: {}", sessionId);
+                return false;
+            }
+
+            log.info("Session /compact completed for session: {}", sessionId);
+            return true;
+
+        } catch (Exception e) {
+            log.error("Failed to compact session: {}", sessionId, e);
+            return false;
+        }
+    }
+
+    /**
+     * 调用 Claude CLI 生成上下文摘要（阻塞调用）
+     * 独立进程，不复用 Worker，仅用于压缩时快速生成摘要
+     * 使用 json 输出格式以提取 token 用量
+     * @param responseContent 原始响应内容
+     * @param workDir 工作目录
+     * @param userId 用户ID（用于累积 token 统计）
+     * @return 摘要文本，失败返回 null
+     */
+    private String generateContextSummary(String responseContent, String workDir, String userId) {
+        String installPath = claudeConfig.getInstallPath();
+        if (installPath == null || installPath.isEmpty()) {
+            return null;
+        }
+
+        try {
+            List<String> command = new ArrayList<>();
+            command.add(installPath);
+            command.add("--print");
+            command.add("--input-format");
+            command.add("text");
+            command.add("--output-format");
+            command.add("json");
+
+            String model = claudeConfig.getModel();
+            if (model != null && !model.isEmpty()) {
+                command.add("--model");
+                command.add(model);
+            }
+
+            // 限制输入长度，避免摘要请求本身消耗过多 token
+            String truncatedContent = responseContent.length() > 8000
+                    ? responseContent.substring(0, 8000) + "\n...[内容已截断]"
+                    : responseContent;
+
+            String prompt = "请将以下对话内容压缩为结构化的上下文摘要文档，用于后续会话恢复上下文。" +
+                    "要求：保留关键决策、完成的工作、当前状态、待办事项。用中文，简洁精炼。\n\n" +
+                    truncatedContent;
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(false);
+            if (workDir != null && !workDir.isEmpty()) {
+                pb.directory(new java.io.File(workDir));
+            }
+
+            Process process = pb.start();
+            process.getOutputStream().write((prompt + "\n").getBytes());
+            process.getOutputStream().flush();
+            process.getOutputStream().close();
+
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    output.append(line).append("\n");
+                }
+            }
+
+            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("Context summary generation timed out");
+                return null;
+            }
+
+            String rawOutput = output.toString().trim();
+            if (rawOutput.isEmpty()) return null;
+
+            // 解析 json 输出，提取摘要和 token 用量
+            try {
+                com.fasterxml.jackson.databind.JsonNode resultNode = objectMapper.readTree(rawOutput);
+                String summary = "";
+                if (resultNode.has("result")) {
+                    summary = resultNode.get("result").asText();
+                } else if (resultNode.has("content")) {
+                    com.fasterxml.jackson.databind.JsonNode content = resultNode.get("content");
+                    if (content.isArray()) {
+                        StringBuilder sb = new StringBuilder();
+                        for (com.fasterxml.jackson.databind.JsonNode item : content) {
+                            if (item.has("text")) sb.append(item.get("text").asText());
+                        }
+                        summary = sb.toString();
+                    }
+                }
+
+                // 提取 token 用量并累积
+                if (resultNode.has("usage") && userId != null) {
+                    com.fasterxml.jackson.databind.JsonNode usageNode = resultNode.get("usage");
+                    int inputTokens = usageNode.has("input_tokens") ? usageNode.get("input_tokens").asInt() : 0;
+                    int outputTokens = usageNode.has("output_tokens") ? usageNode.get("output_tokens").asInt() : 0;
+                    TokenUsage cumulative = cumulativeTokenUsage.computeIfAbsent(userId, k -> new TokenUsage());
+                    cumulative.add(inputTokens, outputTokens);
+                    log.info("Context summary token usage: input={}, output={}", inputTokens, outputTokens);
+                }
+
+                log.info("Generated context summary, length: {}", summary.length());
+                return summary.isEmpty() ? null : summary;
+            } catch (Exception parseEx) {
+                // json 解析失败，直接用原始输出
+                log.warn("Failed to parse summary json, using raw output: {}", parseEx.getMessage());
+                return rawOutput;
+            }
+
+        } catch (Exception e) {
+            log.error("Failed to generate context summary", e);
+            return null;
+        }
     }
 
     // ==================== 记忆文档管理 ====================
@@ -1959,12 +2156,21 @@ public class ClaudeApiService {
         return new TokenUsage();
     }
 
+    /**
+     * 获取用户的累积 token 统计（跨 session，含摘要生成消耗）
+     */
+    public TokenUsage getCumulativeTokenUsage(String userId) {
+        return cumulativeTokenUsage.getOrDefault(userId, new TokenUsage());
+    }
+
     public String getTokenUsageSummary(String userId) {
-        TokenUsage usage = getTokenUsage(userId);
+        TokenUsage sessionUsage = getTokenUsage(userId);
+        TokenUsage cumulative = getCumulativeTokenUsage(userId);
         String sessionId = sessionIds.get(userId);
         String sessionLabel = sessionId != null ? " (Session: " + sessionId.substring(0, Math.min(12, sessionId.length())) + "...)" : "";
-        return String.format("输入: %s, 输出: %s, 总计: %s%s",
-                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), formatTokens(usage.totalTokens), sessionLabel);
+        return String.format("本次会话 - 输入: %s, 输出: %s, 总计: %s%s\n累积总计 - 输入: %s, 输出: %s, 总计: %s",
+                formatTokens(sessionUsage.inputTokens), formatTokens(sessionUsage.outputTokens), formatTokens(sessionUsage.totalTokens), sessionLabel,
+                formatTokens(cumulative.inputTokens), formatTokens(cumulative.outputTokens), formatTokens(cumulative.totalTokens));
     }
 
     public String getTaskCompletionSummary(String userId, long durationMs, String responseContent) {
@@ -1974,24 +2180,62 @@ public class ClaudeApiService {
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
         int contextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
+
+        // 检查是否有 /compact 后的显示覆盖
+        if (sessionId != null && contextDisplayPercent.containsKey(sessionId)) {
+            contextPercent = contextDisplayPercent.get(sessionId);
+        }
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
 
-        // 自动压缩检查：超过阈值时生成记忆文档并清除会话
+        // 自动压缩检查：超过阈值时分两步处理
+        // 第一次触发：调 Claude /compact 压缩 session
+        // 第二次触发：保存记忆文档 + 清 session（进程保留）
         String compactionInfo = "";
         if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
-            // 保存记忆文档
-            String workDir = claudeConfig.getWorkDir();
-            if (workDir == null || workDir.isEmpty()) {
-                workDir = System.getProperty("user.dir");
-            }
-            String memoryPath = saveMemoryDocument(sessionId, workDir, responseContent);
-            String memoryNote = memoryPath != null ? "\n📁 记忆文档已保存: `.vibe-memory/`" : "";
+            if (!compactedSessions.contains(sessionId)) {
+                // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
+                compactedSessions.add(sessionId);
+                boolean compacted = compactSession(sessionId);
+                // /compact 后实际上下文约为原来的一半，覆盖显示比例（不删 token 统计）
+                if (compacted) {
+                    contextDisplayPercent.put(sessionId, contextPercent / 2);
+                }
+                compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "%）" +
+                        (compacted ? "\n已执行 /compact 压缩会话上下文" : "") +
+                        "\n下次消息将使用压缩后的会话";
+                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}", userId, contextPercent, sessionId);
+            } else {
+                // 第二次触发：保存记忆文档 + 清 session
+                String workDir = claudeConfig.getWorkDir();
+                if (workDir == null || workDir.isEmpty()) {
+                    workDir = System.getProperty("user.dir");
+                }
 
-            // 清除当前会话，下次消息将使用新会话（自动压缩）
-            sessionIds.remove(userId);
-            destroyProcessGroup(userId);
-            compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "% 超过阈值 " + claudeConfig.getContextCompactionThreshold() + "%）" + memoryNote + "\n下次消息将自动读取记忆文档恢复上下文";
-            log.info("Auto compaction triggered for user: {}, context: {}%, memory: {}", userId, contextPercent, memoryPath);
+                // 生成摘要并保存（token 消耗已计入 cumulativeTokenUsage）
+                String summary = generateContextSummary(responseContent, workDir, userId);
+                String saveContent = (summary != null && !summary.isEmpty()) ? summary : responseContent;
+                String memoryPath = saveMemoryDocument(sessionId, workDir, saveContent);
+
+                // 仅清 session 和显示覆盖，保留所有进程和累积 token 统计
+                sessionIds.remove(userId);
+                contextDisplayPercent.remove(sessionId);
+                List<ClaudeProcess> pool = processPools.get(userId);
+                if (pool != null) {
+                    String groupId = getActiveGroupId(userId);
+                    for (ClaudeProcess p : pool) {
+                        if (groupId != null && groupId.equals(p.groupId)) {
+                            p.sessionId = null;
+                            p.destroyCliProcess();
+                        }
+                    }
+                }
+
+                compactedSessions.remove(sessionId);
+                compactionInfo = "\n\n🔄 **上下文已二次压缩**（使用量 " + contextPercent + "%）" +
+                        (memoryPath != null ? "\n📁 记忆文档已保存: `.vibe-memory/`" : "") +
+                        "\n下次消息将自动读取记忆文档恢复上下文";
+                log.info("Auto compaction (step 2: memory doc) for user: {}, context: {}%, memory: {}", userId, contextPercent, memoryPath);
+            }
         }
 
         return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s%s",

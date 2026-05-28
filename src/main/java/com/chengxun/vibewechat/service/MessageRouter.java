@@ -701,6 +701,7 @@ public class MessageRouter {
         String sessionId = claudeApiService.getSessionId(userId);
         int sessionCount = claudeApiService.getSessionHistory(userId).size();
         ClaudeApiService.TokenUsage usage = claudeApiService.getTokenUsage(userId);
+        ClaudeApiService.TokenUsage cumulative = claudeApiService.getCumulativeTokenUsage(userId);
         String activeProfile = configService.getActiveProfile();
         int processCount = claudeApiService.getProcessCount(userId);
         int parentCount = claudeApiService.getParentProcessCount(userId);
@@ -732,9 +733,18 @@ public class MessageRouter {
 
                 **💬 会话信息**
 
-                | 当前会话 | 历史会话 | Token 输入 | Token 输出 | Token 总计 | 关键词过滤 |
-                |----------|----------|------------|------------|------------|------------|
-                | `%s` | %d 个 | %s | %s | %s | %d 个 |
+                | 当前会话 | 历史会话 | 关键词过滤 |
+                |----------|----------|------------|
+                | `%s` | %d 个 | %d 个 |
+
+                ---
+
+                **📈 Token 统计**
+
+                | 类型 | Token 输入 | Token 输出 | Token 总计 |
+                |------|------------|------------|------------|
+                | 本次会话 | %s | %s | %s |
+                | 累积总计 | %s | %s | %s |
 
                 ---
 
@@ -769,10 +779,13 @@ public class MessageRouter {
                 quotaStatus,
                 sessionId != null ? sessionId.substring(0, Math.min(12, sessionId.length())) + "..." : "无",
                 sessionCount,
+                filterConfig.getBlockedKeywords().size(),
                 formatTokens(usage.getInputTokens()),
                 formatTokens(usage.getOutputTokens()),
                 formatTokens(usage.getTotalTokens()),
-                filterConfig.getBlockedKeywords().size(),
+                formatTokens(cumulative.getInputTokens()),
+                formatTokens(cumulative.getOutputTokens()),
+                formatTokens(cumulative.getTotalTokens()),
                 filterConfig.isShowMessageStatus() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowToolCalls() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowFileRead() ? "✅ 开" : "❌ 关",
