@@ -45,6 +45,9 @@ public class ClaudeApiService {
     // 上下文压缩记忆文档（sessionId -> 文件路径）
     private final Map<String, String> memoryDocuments = new ConcurrentHashMap<>();
 
+    // 进程 ID 生成器
+    private static final java.util.concurrent.atomic.AtomicLong processIdGenerator = new java.util.concurrent.atomic.AtomicLong(0);
+
     // 磁盘会话缓存
     private List<DiskSession> diskSessions = new ArrayList<>();
 
@@ -53,6 +56,8 @@ public class ClaudeApiService {
     private final Map<String, BlockingQueue<PendingRequest>> requestQueues = new ConcurrentHashMap<>();
     // 当前活跃进程索引（用于 v-fork 克隆当前进程）
     private final Map<String, Integer> currentProcessIndex = new ConcurrentHashMap<>();
+    // 延迟重启标记（groupId -> true，配置变更后等任务完成再重启）
+    private final Map<String, Boolean> pendingRestart = new ConcurrentHashMap<>();
 
     // 空闲进程清理调度器
     private ScheduledExecutorService cleanupScheduler;
@@ -116,9 +121,13 @@ public class ClaudeApiService {
         long lastActiveTime = System.currentTimeMillis();
         long startTime = System.currentTimeMillis();
 
+        // 进程标识
+        String processId;               // 进程唯一ID（用于父子关系绑定）
+        String groupId;                 // 进程组ID（组内共享 session 和工作目录）
+
         // Fork 进程组支持
-        boolean isParent = false;   // 是否为父进程
-        String parentId = null;     // 父进程的 userId（子进程才有）
+        boolean isParent = false;       // 是否为初始主进程
+        String parentId = null;         // 父进程的 processId（fork 子进程才有）
         boolean isIndependent = false;  // 是否为独立进程（v-newproc 创建）
 
         /**
@@ -153,10 +162,12 @@ public class ClaudeApiService {
     static class PendingRequest {
         String message;
         CompletableFuture<String> future;
+        String groupId;  // 任务所属进程组
 
-        PendingRequest(String message, CompletableFuture<String> future) {
+        PendingRequest(String message, CompletableFuture<String> future, String groupId) {
             this.message = message;
             this.future = future;
+            this.groupId = groupId;
         }
     }
 
@@ -182,35 +193,49 @@ public class ClaudeApiService {
     private ClaudeProcess getOrCreateProcess(String userId) {
         List<ClaudeProcess> pool = processPools.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>());
 
-        // 1. 查找组内空闲 Worker（线程空闲，没有在执行任务）
-        for (ClaudeProcess p : pool) {
-            if (!p.busy) {
-                // Worker 空闲，如果它没有活跃的 CLI 进程，为其创建一个
-                if (!p.hasActiveCliProcess()) {
-                    if (!attachCliProcess(p, userId)) {
-                        continue; // 创建失败，尝试下一个空闲进程
-                    }
-                }
-                return p;
+        // 获取当前活跃进程组ID
+        int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+        String activeGroupId = null;
+        if (activeIndex >= 0 && activeIndex < pool.size()) {
+            activeGroupId = pool.get(activeIndex).groupId;
+        }
+
+        // 若该组有延迟重启标记，禁止新任务进入（排队等待重启完成后再处理）
+        if (activeGroupId != null) {
+            String restartKey = userId + ":" + activeGroupId;
+            if (pendingRestart.containsKey(restartKey)) {
+                return null;
             }
         }
 
-        // 2. 检查进程数上限（克隆进程也计入）
-        if (pool.size() >= claudeConfig.getMaxProcessesPerUser()) {
-            return null; // 需要排队
+        // 1. 在当前进程组内查找空闲 Worker
+        if (activeGroupId != null) {
+            for (ClaudeProcess p : pool) {
+                if (activeGroupId.equals(p.groupId) && !p.busy) {
+                    if (!p.hasActiveCliProcess()) {
+                        if (!attachCliProcess(p, userId)) {
+                            continue;
+                        }
+                    }
+                    return p;
+                }
+            }
+            // 当前进程组全忙，排队（不让其他进程组帮忙）
+            return null;
         }
 
-        // 3. 进程池为空时创建父进程 Worker
+        // 2. 没有活跃进程组（首次使用），创建主进程
         if (pool.isEmpty()) {
             ClaudeProcess cp = createNewWorker(userId, pool, true);
             if (!attachCliProcess(cp, userId)) {
                 pool.remove(cp);
-                return null; // 创建失败
+                return null;
             }
+            currentProcessIndex.put(userId, 0);
             return cp;
         }
 
-        // 4. 有 Worker 但全忙：排队等待空闲 Worker
+        // 3. 有进程但无活跃组（异常情况），排队
         return null;
     }
 
@@ -299,6 +324,8 @@ public class ClaudeApiService {
 
     private ClaudeProcess createNewWorker(String userId, List<ClaudeProcess> pool, boolean isParent, boolean isIndependent) {
         ClaudeProcess worker = new ClaudeProcess();
+        worker.processId = String.valueOf(processIdGenerator.incrementAndGet());
+        worker.groupId = worker.processId;  // 新进程自成一组
         worker.isParent = isParent;
         worker.isIndependent = isIndependent;
         worker.thinkingLevel = thinkingConfig.getLevel();
@@ -322,50 +349,42 @@ public class ClaudeApiService {
     }
 
     /**
-     * Fork 子 Worker：共享父 Worker 的 session 和工作目录
+     * Fork 子 Worker：从指定源进程克隆，共享 session、工作目录和 thinking 配置
+     * 子进程绑定到进程组根进程（不允许嵌套绑定）
      */
-    private ClaudeProcess forkProcess(String userId, List<ClaudeProcess> pool) {
-        // 找到父 Worker
-        ClaudeProcess parent = null;
-        for (ClaudeProcess p : pool) {
-            if (p.isParent) {
-                parent = p;
-                break;
-            }
-        }
-
-        if (parent == null) {
-            log.warn("No parent worker found for user: {}, cannot fork", userId);
+    private ClaudeProcess forkProcess(String userId, List<ClaudeProcess> pool, ClaudeProcess source) {
+        if (source == null) {
+            log.warn("No source process found for user: {}, cannot fork", userId);
             return null;
         }
 
-        // 创建子 Worker，共享父 Worker 的 session 和工作目录
+        // 找到进程组的根进程（processId == groupId）
+        ClaudeProcess groupRoot = null;
+        for (ClaudeProcess p : pool) {
+            if (source.groupId.equals(p.processId)) {
+                groupRoot = p;
+                break;
+            }
+        }
+        if (groupRoot == null) groupRoot = source;
+
         ClaudeProcess child = new ClaudeProcess();
+        child.processId = String.valueOf(processIdGenerator.incrementAndGet());
+        child.groupId = source.groupId;  // 子进程继承源进程的组ID
         child.isParent = false;
-        child.parentId = userId;
-        child.sessionId = parent.sessionId;
-        child.workDir = parent.workDir;
-        child.thinkingLevel = parent.thinkingLevel;
+        child.sessionId = source.sessionId;
+        child.workDir = source.workDir;
+        child.thinkingLevel = source.thinkingLevel;
+
+        // 独立进程的子进程也标记为独立
+        if (source.isIndependent) {
+            child.isIndependent = true;
+        }
+        // 绑定到进程组根进程（扁平结构，不允许嵌套）
+        child.parentId = groupRoot.processId;
 
         pool.add(child);
-        log.info("Forked child worker for user: {}, pool size: {}", userId, pool.size());
-        return child;
-    }
-
-    /**
-     * Fork 子 Worker：使用指定的 session 和工作目录
-     */
-    private ClaudeProcess forkProcess(String userId, List<ClaudeProcess> pool, String sessionId, String workDir) {
-        // 创建子 Worker
-        ClaudeProcess child = new ClaudeProcess();
-        child.isParent = false;
-        child.parentId = userId;
-        child.sessionId = sessionId;
-        child.workDir = workDir;
-        child.thinkingLevel = thinkingConfig.getLevel();
-
-        pool.add(child);
-        log.info("Forked child worker for user: {}, pool size: {}", userId, pool.size());
+        log.info("Forked child worker for user: {}, source independent: {}, pool size: {}", userId, source.isIndependent, pool.size());
         return child;
     }
 
@@ -382,11 +401,12 @@ public class ClaudeApiService {
 
         ClaudeProcess cp = getOrCreateProcess(userId);
         if (cp == null) {
-            // 进程数达上限，加入队列
+            // 当前进程组全忙，加入队列
+            String groupId = getActiveGroupId(userId);
             BlockingQueue<PendingRequest> queue = requestQueues.computeIfAbsent(userId,
                     k -> new LinkedBlockingQueue<>());
-            queue.offer(new PendingRequest(message, future));
-            log.info("Request queued for user: {}, queue size: {}", userId, queue.size());
+            queue.offer(new PendingRequest(message, future, groupId));
+            log.info("Request queued for user: {}, group: {}, queue size: {}", userId, groupId, queue.size());
             return future;
         }
 
@@ -402,8 +422,8 @@ public class ClaudeApiService {
                 future.completeExceptionally(e);
             } finally {
                 cp.busy = false;
-                // processMessage 内部已调用 processEnded，这里不再重复
                 processNextInQueue(userId);
+                checkAndApplyDeferredRestart(userId);
             }
         });
 
@@ -424,10 +444,11 @@ public class ClaudeApiService {
 
         ClaudeProcess cp = getOrCreateProcess(userId);
         if (cp == null) {
+            String groupId = getActiveGroupId(userId);
             BlockingQueue<PendingRequest> queue = requestQueues.computeIfAbsent(userId,
                     k -> new LinkedBlockingQueue<>());
-            queue.offer(new PendingRequest(message, future));
-            log.info("Request queued for user: {}, queue size: {}", userId, queue.size());
+            queue.offer(new PendingRequest(message, future, groupId));
+            log.info("Request queued for user: {}, group: {}, queue size: {}", userId, groupId, queue.size());
             return new SendResult(future, -1);
         }
 
@@ -445,6 +466,7 @@ public class ClaudeApiService {
             } finally {
                 cp.busy = false;
                 processNextInQueue(userId);
+                checkAndApplyDeferredRestart(userId);
             }
         });
 
@@ -581,10 +603,8 @@ public class ClaudeApiService {
                                 sessionHistory.get(userId).add(sessionNode.asText());
                             }
 
-                            // 父进程 session 变更时同步到子进程
-                            if (cp.isParent) {
-                                syncSessionToChildren(userId, sessionNode.asText());
-                            }
+                            // session 变更时同步到子进程
+                            syncSessionToChildren(userId, cp.processId, sessionNode.asText());
                         }
 
                         // result 事件也可能包含 content（兼容新版本 Claude CLI）
@@ -666,27 +686,37 @@ public class ClaudeApiService {
         BlockingQueue<PendingRequest> queue = requestQueues.get(userId);
         if (queue == null || queue.isEmpty()) return;
 
-        PendingRequest next = queue.poll();
-        if (next != null) {
-            CompletableFuture<String> resultFuture = sendMessageAsync(userId, next.message);
-            resultFuture.whenComplete((result, ex) -> {
-                if (ex != null) {
-                    next.future.completeExceptionally(ex);
-                } else {
-                    next.future.complete(result);
-                }
-            });
+        // 先 peek 看下一个任务属于哪个进程组
+        PendingRequest peeked = queue.peek();
+        if (peeked == null) return;
 
-            // 如果请求被重新入队（sendMessageAsync 返回未完成的 future 且请求在队列中），
-            // 安排延迟重试，避免请求永远卡在队列中
-            if (!resultFuture.isDone()) {
-                BlockingQueue<PendingRequest> currentQueue = requestQueues.get(userId);
-                if (currentQueue != null && !currentQueue.isEmpty()) {
-                    log.info("Request re-queued for user: {}, scheduling retry in 3s", userId);
-                    cleanupScheduler.schedule(() -> processNextInQueue(userId), 3, TimeUnit.SECONDS);
-                }
-            }
+        // 若该进程组有延迟重启标记，不处理（等重启完成后再释放）
+        String groupId = peeked.groupId;
+        String restartKey = userId + ":" + groupId;
+        if (pendingRestart.containsKey(restartKey)) return;
+
+        // 检查该进程组是否有空闲 Worker
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return;
+
+        boolean hasIdleWorker = pool.stream()
+                .anyMatch(p -> groupId.equals(p.groupId) && !p.busy);
+        if (!hasIdleWorker) {
+            return;
         }
+
+        // 有空闲 Worker，取出并处理
+        PendingRequest next = queue.poll();
+        if (next == null) return;
+
+        CompletableFuture<String> resultFuture = sendMessageAsync(userId, next.message);
+        resultFuture.whenComplete((result, ex) -> {
+            if (ex != null) {
+                next.future.completeExceptionally(ex);
+            } else {
+                next.future.complete(result);
+            }
+        });
     }
 
     /**
@@ -704,15 +734,14 @@ public class ClaudeApiService {
     }
 
     /**
-     * 父进程 session 变更时同步到子进程
-     * 子进程在当前请求完成后，下次 fork 时会使用新 session
+     * 父进程 session 变更时同步到其子进程
      */
-    private void syncSessionToChildren(String userId, String newSessionId) {
+    private void syncSessionToChildren(String userId, String parentProcessId, String newSessionId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return;
 
         for (ClaudeProcess p : pool) {
-            if (!p.isParent && userId.equals(p.parentId)) {
+            if (parentProcessId.equals(p.parentId)) {
                 p.sessionId = newSessionId;
                 log.info("Synced new session {} to fork child for user: {}", newSessionId, userId);
             }
@@ -730,16 +759,11 @@ public class ClaudeApiService {
     }
 
     /**
-     * 销毁进程组（父进程 + 所有子进程）
+     * 销毁用户所有进程
      */
     public void destroyProcessGroup(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool != null) {
-            // 先销毁所有子进程
-            pool.removeIf(p -> !p.isParent && userId.equals(p.parentId));
-            // 再销毁父进程
-            pool.removeIf(p -> p.isParent);
-            // 清空剩余进程
             pool.forEach(ClaudeProcess::destroy);
         }
         processPools.remove(userId);
@@ -750,9 +774,110 @@ public class ClaudeApiService {
         destroyProcess(userId);
     }
 
+    /**
+     * 销毁当前活跃进程组的所有进程（配置变更时使用）
+     * 其他进程组不受影响，下次使用时会自动应用新配置
+     */
+    public void destroyCurrentGroupProcesses(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return;
+        String groupId = getActiveGroupId(userId);
+        if (groupId == null) return;
+        pool.removeIf(p -> {
+            if (groupId.equals(p.groupId)) {
+                p.destroy();
+                quotaManager.processEnded(userId);
+                return true;
+            }
+            return false;
+        });
+        // 清除当前 session（仅影响当前组）
+        sessionIds.remove(userId);
+        if (pool.isEmpty()) {
+            processPools.remove(userId);
+            currentProcessIndex.remove(userId);
+        }
+    }
+
     public int getProcessCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         return pool != null ? pool.size() : 0;
+    }
+
+    /**
+     * 获取当前活跃进程的组ID
+     */
+    private String getActiveGroupId(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null || pool.isEmpty()) return null;
+        int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+        if (activeIndex >= 0 && activeIndex < pool.size()) {
+            return pool.get(activeIndex).groupId;
+        }
+        return null;
+    }
+
+    /**
+     * 标记当前进程组需要延迟重启（配置变更后调用）
+     * 不会中断正在执行的任务，等所有任务完成后再静默重启
+     */
+    public void markGroupForRestart(String userId) {
+        String groupId = getActiveGroupId(userId);
+        if (groupId != null) {
+            pendingRestart.put(userId + ":" + groupId, true);
+            log.info("Marked group {} for deferred restart for user: {}", groupId, userId);
+        }
+    }
+
+    /**
+     * 检查并执行延迟重启：当进程组内所有进程都空闲时，销毁并重建
+     * 在任务完成时调用
+     */
+    private void checkAndApplyDeferredRestart(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null || pool.isEmpty()) return;
+        String groupId = getActiveGroupId(userId);
+        if (groupId == null) return;
+
+        String key = userId + ":" + groupId;
+        if (!pendingRestart.containsKey(key)) return;
+
+        // 检查该组是否全部空闲
+        boolean groupIdle = pool.stream()
+                .filter(p -> groupId.equals(p.groupId))
+                .noneMatch(p -> p.busy);
+        if (!groupIdle) return;
+
+        // 全部空闲，执行重启
+        pendingRestart.remove(key);
+        pool.removeIf(p -> {
+            if (groupId.equals(p.groupId)) {
+                p.destroy();
+                quotaManager.processEnded(userId);
+                return true;
+            }
+            return false;
+        });
+        sessionIds.remove(userId);
+        if (pool.isEmpty()) {
+            processPools.remove(userId);
+            currentProcessIndex.remove(userId);
+        }
+        log.info("Applied deferred restart for group {} user: {}", groupId, userId);
+
+        // 重启完成后，处理排队任务（会用新配置创建新进程）
+        // 先确保有可用的 Worker
+        pool = processPools.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>());
+        if (pool.isEmpty()) {
+            // 没有 Worker，创建新的（使用新配置）
+            ClaudeProcess newWorker = createNewWorker(userId, pool, true);
+            if (attachCliProcess(newWorker, userId)) {
+                currentProcessIndex.put(userId, 0);
+            } else {
+                pool.remove(newWorker);
+            }
+        }
+        processNextInQueue(userId);
     }
 
     public boolean hasBusyProcesses(String userId) {
@@ -777,11 +902,28 @@ public class ClaudeApiService {
     }
 
     public void forceStopAll(String userId) {
-        destroyProcessGroup(userId);
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return;
+        String groupId = getActiveGroupId(userId);
+        if (groupId == null) return;
+        // 只停止当前进程组的进程
+        pool.removeIf(p -> {
+            if (groupId.equals(p.groupId)) {
+                p.destroy();
+                quotaManager.processEnded(userId);
+                return true;
+            }
+            return false;
+        });
+        if (pool.isEmpty()) {
+            processPools.remove(userId);
+            currentProcessIndex.remove(userId);
+        }
+        processNextInQueue(userId);
     }
 
     /**
-     * 停止当前进程（第一个父进程）的任务
+     * 停止当前活跃进程的任务
      */
     public String forceStopCurrentProcess(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
@@ -789,28 +931,31 @@ public class ClaudeApiService {
             return "无活跃进程";
         }
 
-        // 找到父 Worker
-        ClaudeProcess parent = null;
-        for (ClaudeProcess p : pool) {
-            if (p.isParent) {
-                parent = p;
-                break;
-            }
+        int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+        if (activeIndex < 0 || activeIndex >= pool.size()) {
+            activeIndex = 0;
         }
 
-        if (parent == null) {
-            return "无活跃的父进程";
-        }
-
-        if (!parent.busy) {
+        ClaudeProcess target = pool.get(activeIndex);
+        if (!target.busy) {
             return "当前进程没有正在运行的任务";
         }
 
-        parent.destroy();
-        pool.remove(parent);
+        target.destroy();
+        pool.remove(target);
         quotaManager.processEnded(userId);
 
-        return "已停止当前父进程的任务";
+        // 修正索引
+        if (activeIndex >= pool.size()) {
+            currentProcessIndex.put(userId, Math.max(0, pool.size() - 1));
+        }
+        if (pool.isEmpty()) {
+            processPools.remove(userId);
+            currentProcessIndex.remove(userId);
+        }
+
+        processNextInQueue(userId);
+        return "已停止当前进程的任务";
     }
 
     /**
@@ -836,7 +981,24 @@ public class ClaudeApiService {
         pool.remove(target);
         quotaManager.processEnded(userId);
 
-        String type = target.isParent ? "父进程" : "子进程";
+        // 修正索引
+        int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+        if (activeIndex >= pool.size()) {
+            currentProcessIndex.put(userId, Math.max(0, pool.size() - 1));
+        }
+        if (pool.isEmpty()) {
+            processPools.remove(userId);
+            currentProcessIndex.remove(userId);
+        }
+
+        String type;
+        if (target.parentId != null) {
+            type = "子进程";
+        } else {
+            type = "独立进程";
+        }
+
+        processNextInQueue(userId);
         return "已停止" + type + " (序号: " + (index + 1) + ")";
     }
 
@@ -851,14 +1013,16 @@ public class ClaudeApiService {
     }
 
     /**
-     * 获取当前进程组的忙碌进程数（排除独立进程）
+     * 获取当前活跃进程组的忙碌进程数
      */
     public int getGroupBusyProcessCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return 0;
+        String groupId = getActiveGroupId(userId);
+        if (groupId == null) return 0;
         int count = 0;
         for (ClaudeProcess p : pool) {
-            if (p.busy && !p.isIndependent) count++;
+            if (groupId.equals(p.groupId) && p.busy) count++;
         }
         return count;
     }
@@ -870,9 +1034,11 @@ public class ClaudeApiService {
     public int getGroupIdleProcessCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return 0;
+        String groupId = getActiveGroupId(userId);
+        if (groupId == null) return 0;
         int count = 0;
         for (ClaudeProcess p : pool) {
-            if (!p.busy && !p.isIndependent) count++;
+            if (groupId.equals(p.groupId) && !p.busy) count++;
         }
         return count;
     }
@@ -890,14 +1056,16 @@ public class ClaudeApiService {
     }
 
     /**
-     * 获取当前进程组的进程数（排除独立进程）
+     * 获取当前活跃进程组的进程数
      */
     public int getGroupProcessCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return 0;
+        String groupId = getActiveGroupId(userId);
+        if (groupId == null) return 0;
         int count = 0;
         for (ClaudeProcess p : pool) {
-            if (!p.isIndependent) count++;
+            if (groupId.equals(p.groupId)) count++;
         }
         return count;
     }
@@ -912,12 +1080,44 @@ public class ClaudeApiService {
         return count;
     }
 
+    /**
+     * 统计有 fork 子进程的进程数
+     */
+    public int getParentProcessCount(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess parent : pool) {
+            boolean hasChildren = pool.stream().anyMatch(c -> parent.processId.equals(c.parentId));
+            if (hasChildren) count++;
+        }
+        return count;
+    }
+
+    /**
+     * 统计指定进程的 fork 子进程数
+     */
+    public int getForkChildCount(String userId, String parentProcessId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null) return 0;
+        int count = 0;
+        for (ClaudeProcess p : pool) {
+            if (parentProcessId.equals(p.parentId)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * 统计所有 fork 子进程数（兼容旧调用）
+     */
     public int getForkChildCount(String userId) {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null) return 0;
         int count = 0;
         for (ClaudeProcess p : pool) {
-            if (!p.isParent && userId.equals(p.parentId)) {
+            if (p.parentId != null) {
                 count++;
             }
         }
@@ -928,23 +1128,35 @@ public class ClaudeApiService {
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool == null || pool.isEmpty()) return "无活跃进程";
 
-        // 找到父进程的序号
-        int parentIndex = -1;
-        for (int i = 0; i < pool.size(); i++) {
-            if (pool.get(i).isParent) {
-                parentIndex = i + 1;
-                break;
-            }
-        }
-
         StringBuilder sb = new StringBuilder();
         sb.append("| # | 类型 | 来源 | 会话ID | 工作目录 | 状态 |\n");
         sb.append("|---|------|------|--------|----------|------|\n");
 
         for (int i = 0; i < pool.size(); i++) {
             ClaudeProcess p = pool.get(i);
-            String type = p.isParent ? "父进程" : "子进程";
-            String source = p.isParent ? "-" : "克隆自父进程#" + parentIndex;
+            // 判断该进程是否有子进程
+            boolean hasChildren = pool.stream().anyMatch(c -> p.processId.equals(c.parentId));
+
+            String type;
+            String source;
+            if (hasChildren) {
+                type = "父进程";
+                source = "-";
+            } else if (p.parentId != null) {
+                // fork 子进程：找到父进程的序号
+                type = "子进程";
+                int srcIdx = -1;
+                for (int j = 0; j < pool.size(); j++) {
+                    if (pool.get(j).processId.equals(p.parentId)) {
+                        srcIdx = j + 1;
+                        break;
+                    }
+                }
+                source = srcIdx > 0 ? "克隆自#" + srcIdx : "-";
+            } else {
+                type = "独立进程";
+                source = "-";
+            }
             String sessionId = p.sessionId != null ? p.sessionId.substring(0, Math.min(12, p.sessionId.length())) + "..." : "无";
             String workDir = p.workDir != null ? p.workDir : "默认";
             String status = p.busy ? "忙碌" : "空闲";
@@ -982,10 +1194,17 @@ public class ClaudeApiService {
         // 切换会话
         if (target.sessionId != null) {
             sessionIds.put(userId, target.sessionId);
-            syncSessionToChildren(userId, target.sessionId);
+            syncSessionToChildren(userId, target.processId, target.sessionId);
         }
 
-        String type = target.isParent ? "父进程" : "子进程";
+        String type;
+        if (pool.stream().anyMatch(p -> target.processId.equals(p.parentId))) {
+            type = "父进程";
+        } else if (target.parentId != null) {
+            type = "子进程";
+        } else {
+            type = "独立进程";
+        }
         String busyHint = target.busy ? " [忙碌中]" : "";
         return String.format("已切换到进程%d (%s)%s\n\n📋 会话ID: `%s`\n📁 工作目录: `%s`",
                 index + 1,
@@ -1023,17 +1242,8 @@ public class ClaudeApiService {
         ClaudeProcess activeProcess = pool.get(activeIndex);
 
         // 克隆当前活跃进程
-        ClaudeProcess cp;
-        if (activeProcess.isIndependent) {
-            // 当前是独立进程，直接 fork 自己的 session 和工作目录
-            cp = forkProcess(userId, pool, activeProcess.sessionId, activeProcess.workDir);
-        } else if (activeProcess.isParent) {
-            // 当前是父进程，fork 共享父进程的 session 和工作目录
-            cp = forkProcess(userId, pool);
-        } else {
-            // 当前是子进程，fork 共享当前子进程的 session 和工作目录
-            cp = forkProcess(userId, pool, activeProcess.sessionId, activeProcess.workDir);
-        }
+        // 克隆当前活跃进程（而非固定克隆父进程）
+        ClaudeProcess cp = forkProcess(userId, pool, activeProcess);
 
         if (cp == null) {
             return "克隆进程失败";
@@ -1086,8 +1296,8 @@ public class ClaudeApiService {
             pool = processPools.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>());
         }
 
-        // 创建新独立 Worker（不是克隆，标记为独立进程）
-        ClaudeProcess cp = createNewWorker(userId, pool, true, true);
+        // 创建新独立 Worker（不是克隆，标记为独立进程，isParent=false 避免被当作父进程统计）
+        ClaudeProcess cp = createNewWorker(userId, pool, false, true);
         if (cp == null) {
             return "创建新进程失败";
         }
@@ -1101,6 +1311,9 @@ public class ClaudeApiService {
         if (sessionId == null) {
             cp.sessionId = null;
         }
+
+        // 更新当前活跃进程索引为新创建的进程
+        currentProcessIndex.put(userId, pool.size() - 1);
 
         // 尝试处理排队的消息
         processNextInQueue(userId);
@@ -1129,13 +1342,9 @@ public class ClaudeApiService {
         ClaudeProcess target = pool.get(index);
 
         // 检查是否有子进程
-        if (target.isParent) {
-            // 父进程：检查是否有子进程
-            for (ClaudeProcess p : pool) {
-                if (!p.isParent && userId.equals(p.parentId)) {
-                    return "该父进程有子进程，无法删除\n请先使用 v-delproc 删除子进程";
-                }
-            }
+        boolean hasChildren = pool.stream().anyMatch(p -> target.processId.equals(p.parentId));
+        if (hasChildren) {
+            return "该进程有子进程，无法删除\n请先使用 v-delproc 删除子进程";
         }
 
         // 检查进程是否忙碌
@@ -1148,12 +1357,27 @@ public class ClaudeApiService {
         pool.remove(target);
         quotaManager.processEnded(userId);
 
+        // 修正 currentProcessIndex（删除进程后索引可能偏移）
+        int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+        if (activeIndex >= pool.size()) {
+            currentProcessIndex.put(userId, Math.max(0, pool.size() - 1));
+        } else if (activeIndex == index) {
+            // 删除的是当前活跃进程，重置到 0
+            currentProcessIndex.put(userId, 0);
+        }
+
         // 如果池空了，移除
         if (pool.isEmpty()) {
             processPools.remove(userId);
+            currentProcessIndex.remove(userId);
         }
 
-        String type = target.isParent ? "父进程" : "子进程";
+        String type;
+        if (target.parentId != null) {
+            type = "子进程";
+        } else {
+            type = "独立进程";
+        }
         return "已删除" + type + " (序号: " + (index + 1) + ")";
     }
 
@@ -1167,9 +1391,9 @@ public class ClaudeApiService {
         java.util.List<String> emptyPools = new ArrayList<>();
 
         processPools.forEach((userId, pool) -> {
-            // 先清理空闲超时的子进程（fork child）
+            // 先清理空闲超时的 fork 子进程（有 parentId 且非独立进程）
             pool.removeIf(p -> {
-                if (!p.isParent && !p.busy && (now - p.lastActiveTime) > timeout) {
+                if (p.parentId != null && !p.isIndependent && !p.busy && (now - p.lastActiveTime) > timeout) {
                     log.info("Cleaning up idle fork child process for user: {}", userId);
                     p.destroy();
                     quotaManager.processEnded(userId);
@@ -1178,12 +1402,12 @@ public class ClaudeApiService {
                 return false;
             });
 
-            // 清理空闲超时的父进程（仅在没有子进程时）
-            boolean hasChildren = pool.stream().anyMatch(p -> !p.isParent && userId.equals(p.parentId));
-            if (!hasChildren) {
+            // 清理空闲超时的非子进程（仅在没有子进程时）
+            boolean hasAnyChildren = pool.stream().anyMatch(p -> p.parentId != null);
+            if (!hasAnyChildren) {
                 pool.removeIf(p -> {
-                    if (p.isParent && !p.busy && (now - p.lastActiveTime) > timeout) {
-                        log.info("Cleaning up idle parent process for user: {}", userId);
+                    if (p.parentId == null && !p.busy && (now - p.lastActiveTime) > timeout) {
+                        log.info("Cleaning up idle {} process for user: {}", p.isIndependent ? "independent" : "parent", userId);
                         p.destroy();
                         quotaManager.processEnded(userId);
                         return true;
@@ -1199,7 +1423,7 @@ public class ClaudeApiService {
                 ClaudeProcess oldest = null;
                 long oldestTime = Long.MAX_VALUE;
                 for (ClaudeProcess p : pool) {
-                    if (!p.isParent && !p.busy && p.lastActiveTime < oldestTime) {
+                    if (p.parentId != null && !p.busy && p.lastActiveTime < oldestTime) {
                         oldest = p;
                         oldestTime = p.lastActiveTime;
                     }
@@ -1420,7 +1644,7 @@ public class ClaudeApiService {
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
-            memoryDocuments.remove(currentSession); // 清理记忆文档绑定
+            memoryDocuments.remove(currentSession);
             List<String> history = sessionHistory.get(userId);
             if (history != null) {
                 history.remove(currentSession);
@@ -1429,12 +1653,15 @@ public class ClaudeApiService {
         sessionIds.remove(userId);
         quotaManager.reset(userId);
 
-        // 同步清除进程池中所有 worker 的 sessionId
+        // 只清除当前活跃进程组的 worker sessionId
         List<ClaudeProcess> pool = processPools.get(userId);
         if (pool != null) {
+            String groupId = getActiveGroupId(userId);
             for (ClaudeProcess p : pool) {
-                p.sessionId = null;
-                p.destroyCliProcess(); // 销毁 CLI 进程，下次使用时重建
+                if (groupId != null && groupId.equals(p.groupId)) {
+                    p.sessionId = null;
+                    p.destroyCliProcess();
+                }
             }
         }
     }
@@ -1477,8 +1704,17 @@ public class ClaudeApiService {
         List<String> history = sessionHistory.get(userId);
         if (history != null && history.contains(sessionId)) {
             sessionIds.put(userId, sessionId);
-            // 同步到子进程
-            syncSessionToChildren(userId, sessionId);
+            // 更新当前进程及其子进程的 sessionId
+            List<ClaudeProcess> pool = processPools.get(userId);
+            if (pool != null && !pool.isEmpty()) {
+                int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+                if (activeIndex >= 0 && activeIndex < pool.size()) {
+                    ClaudeProcess current = pool.get(activeIndex);
+                    current.sessionId = sessionId;
+                    current.destroyCliProcess(); // 销毁旧 CLI，下次用新 session 重建
+                    syncSessionToChildren(userId, current.processId, sessionId);
+                }
+            }
             return true;
         }
         return false;
@@ -1804,6 +2040,16 @@ public class ClaudeApiService {
             if (!sessionHistory.get(userId).contains(sessionId)) {
                 sessionHistory.get(userId).add(sessionId);
             }
+            // 更新当前进程的 sessionId
+            List<ClaudeProcess> pool = processPools.get(userId);
+            if (pool != null && !pool.isEmpty()) {
+                int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+                if (activeIndex >= 0 && activeIndex < pool.size()) {
+                    ClaudeProcess current = pool.get(activeIndex);
+                    current.sessionId = sessionId;
+                    current.destroyCliProcess();
+                }
+            }
             log.info("Resumed disk session {} for user: {}", sessionId, userId);
             return true;
         }
@@ -1867,18 +2113,26 @@ public class ClaudeApiService {
     public String getWorkDir() { return claudeConfig.getWorkDir(); }
     public void setWorkDir(String dir) {
         claudeConfig.setWorkDir(dir);
-        // 同步更新所有已有 worker 的工作目录，避免使用旧目录
-        processPools.forEach((userId, pool) -> {
+    }
+
+    /**
+     * 切换当前用户当前进程组的工作目录
+     */
+    public void setCurrentGroupWorkDir(String userId, String dir) {
+        claudeConfig.setWorkDir(dir);
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool != null) {
+            String groupId = getActiveGroupId(userId);
             for (ClaudeProcess p : pool) {
-                if (!p.busy) {
+                if (groupId != null && groupId.equals(p.groupId) && !p.busy) {
                     p.workDir = dir;
-                    p.sessionId = null; // 切换目录后旧 session 不可用，清除
-                    p.destroyCliProcess(); // 旧 CLI 进程需销毁，下次使用新目录重建
+                    p.sessionId = null;
+                    p.destroyCliProcess();
                 }
             }
-        });
-        // 清除所有用户的 sessionId，避免 --resume 尝试恢复不存在的 session
-        sessionIds.clear();
+            // 清除当前用户的 sessionId
+            sessionIds.remove(userId);
+        }
     }
 
     public int getContextWindowSize() { return claudeConfig.getContextWindowSize(); }

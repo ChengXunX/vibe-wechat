@@ -364,18 +364,18 @@ public class MessageRouter {
             case V_CLEAR -> handleClearCommand(userId, parts, contextToken);
             case V_SESSIONS -> handleListSessions(userId, contextToken);
             case V_LIMIT -> handleLimitCommand(userId, parts, contextToken);
-            case V_API -> { if (parts.length > 1) { claudeApiService.setApiUrl(parts[1]); configService.saveConfig(); claudeApiService.clearSessionId(userId); if (claudeApiService.hasBusyProcesses(userId)) { ilinkService.sendText(userId, "已设置 API: " + parts[1] + "\n⚠️ 有任务运行中，配置已保存，下次请求将使用新会话", contextToken); } else { claudeApiService.destroyAllProcesses(userId); ilinkService.sendText(userId, "已设置 API: " + parts[1] + "\n进程已重启，下次请求将使用新会话\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } } }
-            case V_KEY -> { if (parts.length > 1) { claudeApiService.setApiKey(parts[1]); configService.saveConfig(); claudeApiService.clearSessionId(userId); if (claudeApiService.hasBusyProcesses(userId)) { ilinkService.sendText(userId, "已设置 API Key\n⚠️ 有任务运行中，配置已保存，下次请求将使用新会话", contextToken); } else { claudeApiService.destroyAllProcesses(userId); ilinkService.sendText(userId, "已设置 API Key\n进程已重启，下次请求将使用新会话\n⚠️ 已覆盖本地 Claude settings 文件", contextToken); } } }
+            case V_API -> { if (parts.length > 1) { claudeApiService.setApiUrl(parts[1]); configService.saveConfig(); if (claudeApiService.getGroupBusyProcessCount(userId) > 0) { claudeApiService.markGroupForRestart(userId); ilinkService.sendText(userId, "已设置 API: " + parts[1] + "\n✅ 配置已保存，当前任务完成后自动生效", contextToken); } else { claudeApiService.destroyCurrentGroupProcesses(userId); ilinkService.sendText(userId, "已设置 API: " + parts[1] + "\n✅ 配置已生效", contextToken); } } }
+            case V_KEY -> { if (parts.length > 1) { claudeApiService.setApiKey(parts[1]); configService.saveConfig(); if (claudeApiService.getGroupBusyProcessCount(userId) > 0) { claudeApiService.markGroupForRestart(userId); ilinkService.sendText(userId, "已设置 API Key\n✅ 配置已保存，当前任务完成后自动生效", contextToken); } else { claudeApiService.destroyCurrentGroupProcesses(userId); ilinkService.sendText(userId, "已设置 API Key\n✅ 配置已生效", contextToken); } } }
             case V_MODEL -> {
                 if (parts.length > 1) {
                     claudeApiService.setModel(parts[1]);
                     configService.saveConfig();
-                    claudeApiService.clearSessionId(userId);
-                    if (claudeApiService.hasBusyProcesses(userId)) {
-                        ilinkService.sendText(userId, "已设置模型: " + parts[1] + "\n⚠️ 有任务运行中，配置已保存，下次请求将使用新会话", contextToken);
+                    if (claudeApiService.getGroupBusyProcessCount(userId) > 0) {
+                        claudeApiService.markGroupForRestart(userId);
+                        ilinkService.sendText(userId, "已设置模型: " + parts[1] + "\n✅ 配置已保存，当前任务完成后自动生效", contextToken);
                     } else {
-                        claudeApiService.destroyAllProcesses(userId);
-                        ilinkService.sendText(userId, "已设置模型: " + parts[1] + "\n进程已重启，下次请求将使用新会话\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
+                        claudeApiService.destroyCurrentGroupProcesses(userId);
+                        ilinkService.sendText(userId, "已设置模型: " + parts[1] + "\n✅ 配置已生效", contextToken);
                     }
                 }
             }
@@ -397,12 +397,12 @@ public class MessageRouter {
                 if (parts.length > 1) {
                     claudeApiService.setInstallPath(parts[1]);
                     configService.saveConfig();
-                    claudeApiService.clearSessionId(userId);
-                    if (claudeApiService.hasBusyProcesses(userId)) {
-                        ilinkService.sendText(userId, "已设置路径: " + parts[1] + "\n⚠️ 有任务运行中，配置已保存，下次请求将使用新会话", contextToken);
+                    if (claudeApiService.getGroupBusyProcessCount(userId) > 0) {
+                        claudeApiService.markGroupForRestart(userId);
+                        ilinkService.sendText(userId, "已设置路径: " + parts[1] + "\n✅ 配置已保存，当前任务完成后自动生效", contextToken);
                     } else {
-                        claudeApiService.destroyAllProcesses(userId);
-                        ilinkService.sendText(userId, "已设置路径: " + parts[1] + "\n进程已重启，下次请求将使用新会话\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
+                        claudeApiService.destroyCurrentGroupProcesses(userId);
+                        ilinkService.sendText(userId, "已设置路径: " + parts[1] + "\n✅ 配置已生效", contextToken);
                     }
                 }
             }
@@ -429,26 +429,30 @@ public class MessageRouter {
                     // 检查进程组是否有忙碌任务
                     int groupBusyCount = claudeApiService.getGroupBusyProcessCount(userId);
 
-                    if (groupBusyCount > 0 && !force) {
-                        ilinkService.sendText(userId, "⚠️ 进程组繁忙中（" + groupBusyCount + " 个进程忙碌），无法切换目录\n\n请等待任务完成，或使用 `v-cd <路径> force` 强制停止后切换", contextToken);
-                        return;
-                    }
-
-                    // force=true 时先强制停止进程组
                     if (groupBusyCount > 0 && force) {
                         claudeApiService.forceStopAll(userId);
                         ilinkService.sendText(userId, "⚠️ 已强制停止 " + groupBusyCount + " 个忙碌进程", contextToken);
+                        groupBusyCount = 0;
                     }
 
+                    // 保存目录配置
+                    claudeConfig().setWorkDir(dir.getAbsolutePath());
                     System.setProperty("user.dir", dir.getAbsolutePath());
-                    claudeApiService.setWorkDir(dir.getAbsolutePath());
                     configService.saveConfig();
 
-                    if (clearContext) {
-                        claudeApiService.clearCurrentSession(userId);
-                        ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n当前会话已清空", contextToken);
+                    if (groupBusyCount > 0) {
+                        // 有任务运行中，标记延迟重启
+                        claudeApiService.markGroupForRestart(userId);
+                        ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath() + "\n✅ 配置已保存，当前任务完成后自动生效", contextToken);
                     } else {
-                        ilinkService.sendText(userId, "工作目录: " + dir.getAbsolutePath(), contextToken);
+                        // 无任务，立即生效
+                        claudeApiService.destroyCurrentGroupProcesses(userId);
+                        String msg = "工作目录: " + dir.getAbsolutePath() + "\n✅ 配置已生效";
+                        if (clearContext) {
+                            claudeApiService.clearCurrentSession(userId);
+                            msg += "\n当前会话已清空";
+                        }
+                        ilinkService.sendText(userId, msg, contextToken);
                     }
                 } else {
                     ilinkService.sendText(userId, "用法: v-cd <路径> [mkdir] [clear] [force]\n- mkdir: 目录不存在时自动创建\n- clear: 清空当前会话\n- force: 强制停止繁忙任务后切换", contextToken);
@@ -499,11 +503,12 @@ public class MessageRouter {
     private void handleProcessStatus(String userId, String contextToken) {
         String status = claudeApiService.getProcessStatus(userId);
         int count = claudeApiService.getProcessCount(userId);
-        int forkCount = claudeApiService.getForkChildCount(userId);
-        int independentCount = claudeApiService.getIndependentProcessCount(userId);
+        int parentCount = claudeApiService.getParentProcessCount(userId);
+        int forkChildCount = claudeApiService.getForkChildCount(userId);
+        int independentCount = count - parentCount - forkChildCount;
         String quotaStatus = quotaManager.getStatus(userId);
         int busyCount = claudeApiService.getBusyProcessCount(userId);
-        ilinkService.sendText(userId, String.format("**进程状态** (共%d个, 父进程1个, fork子进程%d个, 独立进程%d个, 忙碌%d个)\n\n%s\n\n💡 使用 `v-proc <序号>` 切换进程\n\n**配额状态**\n%s", count, forkCount, independentCount, busyCount, status, quotaStatus), contextToken);
+        ilinkService.sendText(userId, String.format("**进程状态** (共%d个, 父进程%d个, fork子进程%d个, 独立进程%d个, 忙碌%d个)\n\n%s\n\n💡 使用 `v-proc <序号>` 切换进程\n\n**配额状态**\n%s", count, parentCount, forkChildCount, independentCount, busyCount, status, quotaStatus), contextToken);
     }
 
     private void showHelp(String userId, String contextToken) {
@@ -633,8 +638,9 @@ public class MessageRouter {
         ClaudeApiService.TokenUsage usage = claudeApiService.getTokenUsage(userId);
         String activeProfile = configService.getActiveProfile();
         int processCount = claudeApiService.getProcessCount(userId);
+        int parentCount = claudeApiService.getParentProcessCount(userId);
         int forkCount = claudeApiService.getForkChildCount(userId);
-        int independentCount = claudeApiService.getIndependentProcessCount(userId);
+        int independentCount = processCount - parentCount - forkCount;
         int busyCount = claudeApiService.getBusyProcessCount(userId);
         String quotaStatus = quotaManager.getStatus(userId);
 
@@ -653,9 +659,9 @@ public class MessageRouter {
 
                 **⚡ 进程状态**
 
-                | 进程总数 | fork 子进程 | 独立进程 | 忙碌进程 | 空闲超时 | 配额 |
-                |----------|-------------|----------|----------|----------|------|
-                | %d/%d | %d | %d | %d | %s | %s |
+                | 进程总数 | 父进程 | fork 子进程 | 独立进程 | 忙碌进程 | 空闲超时 | 配额 |
+                |----------|----------|-------------|----------|----------|----------|------|
+                | %d/%d | %d | %d | %d | %d | %s | %s |
 
                 ---
 
@@ -681,6 +687,7 @@ public class MessageRouter {
                 claudeConfig().getWorkDir() != null && !claudeConfig().getWorkDir().isEmpty() ? claudeConfig().getWorkDir() : System.getProperty("user.dir"),
                 processCount,
                 claudeApiService.getMaxProcessesPerUser(),
+                parentCount,
                 forkCount,
                 independentCount,
                 busyCount,
@@ -807,12 +814,12 @@ public class MessageRouter {
 
     private void handleSwitchCommand(String userId, String[] parts, String contextToken) {
         if (parts.length >= 2 && configService.switchProfile(parts[1])) {
-            claudeApiService.clearSessionId(userId);
-            if (claudeApiService.hasBusyProcesses(userId)) {
-                ilinkService.sendText(userId, "已切换: " + parts[1] + "\n⚠️ 有任务运行中，配置已保存，下次请求将使用新会话", contextToken);
+            if (claudeApiService.getGroupBusyProcessCount(userId) > 0) {
+                claudeApiService.markGroupForRestart(userId);
+                ilinkService.sendText(userId, "已切换: " + parts[1] + "\n✅ 配置已保存，当前任务完成后自动生效", contextToken);
             } else {
-                claudeApiService.destroyAllProcesses(userId);
-                ilinkService.sendText(userId, "已切换: " + parts[1] + "\n进程已重启，下次请求将使用新会话\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
+                claudeApiService.destroyCurrentGroupProcesses(userId);
+                ilinkService.sendText(userId, "已切换: " + parts[1] + "\n✅ 配置已生效", contextToken);
             }
         } else {
             ilinkService.sendText(userId, "用法: v-switch <name>\n使用 v-profiles 查看", contextToken);
@@ -1089,13 +1096,13 @@ public class MessageRouter {
         claudeApiService.setApiUrl(apiUrl);
         claudeApiService.setModel(model);
         configService.saveConfig();
-        claudeApiService.clearSessionId(userId);
 
-        if (claudeApiService.hasBusyProcesses(userId)) {
-            ilinkService.sendText(userId, "✅ 一键配置完成\n\n🔑 API Key: " + apiKey.substring(0, Math.min(8, apiKey.length())) + "...\n🌐 API: " + apiUrl + "\n🤖 模型: " + model + "\n\n⚠️ 有任务运行中，配置已保存，下次请求将使用新会话", contextToken);
+        if (claudeApiService.getGroupBusyProcessCount(userId) > 0) {
+            claudeApiService.markGroupForRestart(userId);
+            ilinkService.sendText(userId, "✅ 一键配置完成\n\n🔑 API Key: " + apiKey.substring(0, Math.min(8, apiKey.length())) + "...\n🌐 API: " + apiUrl + "\n🤖 模型: " + model + "\n\n✅ 配置已保存，当前任务完成后自动生效", contextToken);
         } else {
-            claudeApiService.destroyAllProcesses(userId);
-            ilinkService.sendText(userId, "✅ 一键配置完成\n\n🔑 API Key: " + apiKey.substring(0, Math.min(8, apiKey.length())) + "...\n🌐 API: " + apiUrl + "\n🤖 模型: " + model + "\n\n进程已重启，下次请求将使用新会话\n⚠️ 已覆盖本地 Claude settings 文件", contextToken);
+            claudeApiService.destroyCurrentGroupProcesses(userId);
+            ilinkService.sendText(userId, "✅ 一键配置完成\n\n🔑 API Key: " + apiKey.substring(0, Math.min(8, apiKey.length())) + "...\n🌐 API: " + apiUrl + "\n🤖 模型: " + model + "\n\n✅ 配置已生效", contextToken);
         }
     }
 
