@@ -160,13 +160,8 @@ public class MessageRouter {
                     if (!filterConfig.isShowAgentCalls()) return;
                     if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
-                    String subagentType = "";
-                    try {
-                        com.fasterxml.jackson.databind.JsonNode inputNode = new com.fasterxml.jackson.databind.ObjectMapper().readTree(toolInput);
-                        subagentType = inputNode.has("subagent_type") ? inputNode.get("subagent_type").asText() : "";
-                    } catch (Exception ignored) {}
-                    String typeInfo = subagentType.isEmpty() ? "" : " `" + subagentType + "`";
-                    ilinkService.sendText(userId, "> 🤖 **Agent**" + typeInfo + procTag, contextToken != null ? contextToken : "", "tool");
+                    String agentInfo = formatAgentInput(toolInput);
+                    ilinkService.sendText(userId, "🤖 Agent" + procTag + "\n" + agentInfo, contextToken != null ? contextToken : "", "tool");
                     quotaManager.recordMessageSent(userId, "tool");
                     return;
                 }
@@ -177,9 +172,9 @@ public class MessageRouter {
                     if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
                     if ("EnterPlanMode".equals(toolName)) {
-                        ilinkService.sendText(userId, "> 📋 **进入规划模式**" + procTag, contextToken != null ? contextToken : "", "tool");
+                        ilinkService.sendText(userId, "📋 进入规划模式" + procTag, contextToken != null ? contextToken : "", "tool");
                     } else {
-                        ilinkService.sendText(userId, "> ✅ **退出规划模式**" + procTag, contextToken != null ? contextToken : "", "tool");
+                        ilinkService.sendText(userId, "✅ 退出规划模式" + procTag, contextToken != null ? contextToken : "", "tool");
                     }
                     quotaManager.recordMessageSent(userId, "tool");
                     return;
@@ -205,19 +200,14 @@ public class MessageRouter {
 
                 String contextToken = userContextTokens.get(userId);
                 String cleanInput = toolInput.replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\");
-                if (cleanInput.length() > 300) {
-                    cleanInput = cleanInput.substring(0, 300) + "...";
-                }
+                String formattedInput = formatToolInput(toolName, cleanInput);
                 String msg;
                 if (isFileReadTool(toolName)) {
-                    msg = "> 📖 **文件读取** `" + toolName + "`" + procTag
-                            + "\n```\n" + cleanInput + "\n```";
+                    msg = "📖 " + toolName + procTag + "\n" + formattedInput;
                 } else if (isFileEditTool(toolName)) {
-                    msg = "> ✏️ **文件编辑** `" + toolName + "`" + procTag
-                            + "\n```\n" + cleanInput + "\n```";
+                    msg = "✏️ " + toolName + procTag + "\n" + formattedInput;
                 } else {
-                    msg = "> 🔧 **工具调用** `" + toolName + "`" + procTag
-                            + "\n```\n" + cleanInput + "\n```";
+                    msg = "🔧 " + toolName + procTag + "\n" + formattedInput;
                 }
                 ilinkService.sendText(userId, msg, contextToken != null ? contextToken : "", "tool");
                 quotaManager.recordMessageSent(userId, "tool");
@@ -233,12 +223,14 @@ public class MessageRouter {
                     if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
                     String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
-                    String summary = result.length() > 200 ? result.substring(0, 200) + "..." : result;
-                    String msg = "> 🤖 **Agent 完成**" + procTag;
-                    if (!summary.isEmpty()) {
-                        msg += "\n> " + summary;
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("🤖 Agent 完成").append(procTag);
+                    if (!result.isEmpty()) {
+                        // 格式化结果内容
+                        String formattedResult = formatAgentResult(result);
+                        sb.append("\n").append(formattedResult);
                     }
-                    ilinkService.sendText(userId, msg, contextToken != null ? contextToken : "", "sub_result");
+                    ilinkService.sendText(userId, sb.toString(), contextToken != null ? contextToken : "", "sub_result");
                     quotaManager.recordMessageSent(userId, "sub_result");
                 }
             }
@@ -252,7 +244,7 @@ public class MessageRouter {
                     // 子任务完成消息不消耗配额，其他子任务消息消耗配额
                     if (!isCompleted && !quotaManager.canSendToolMessage(userId)) return;
                     String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
-                    ilinkService.sendText(userId, "> " + status + procTag, contextToken != null ? contextToken : "", messageType);
+                    ilinkService.sendText(userId, status + procTag, contextToken != null ? contextToken : "", messageType);
                     if (!isCompleted) {
                         quotaManager.recordMessageSent(userId, messageType);
                     }
@@ -275,6 +267,178 @@ public class MessageRouter {
         return toolName.equalsIgnoreCase("Write") || toolName.equalsIgnoreCase("Edit")
                 || toolName.equalsIgnoreCase("write_file") || toolName.equalsIgnoreCase("edit_file")
                 || toolName.equalsIgnoreCase("NotebookEdit");
+    }
+
+    /**
+     * 格式化工具输入内容，添加 markdown 美化
+     */
+    private String formatToolInput(String toolName, String input) {
+        if (input == null || input.isEmpty()) return "";
+
+        // 尝试解析为 JSON 并格式化
+        if (input.trim().startsWith("{") || input.trim().startsWith("[")) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(input);
+                // 提取关键字段进行美化显示
+                StringBuilder sb = new StringBuilder();
+                if (node.isObject()) {
+                    node.fields().forEachRemaining(entry -> {
+                        String key = entry.getKey();
+                        com.fasterxml.jackson.databind.JsonNode value = entry.getValue();
+                        if ("file_path".equals(key) || "path".equals(key) || "command".equals(key)) {
+                            sb.append(key).append(": `").append(value.asText()).append("`\n");
+                        } else if ("content".equals(key) && value.asText().length() > 100) {
+                            // 长内容用代码块包裹
+                            sb.append(key).append(":\n```\n").append(value.asText()).append("\n```\n");
+                        } else if (value.isTextual()) {
+                            sb.append(key).append(": ").append(value.asText()).append("\n");
+                        } else {
+                            sb.append(key).append(": ").append(value).append("\n");
+                        }
+                    });
+                    return sb.toString().strip();
+                }
+            } catch (Exception e) {
+                // JSON 解析失败，使用原始输入
+            }
+        }
+
+        // 非 JSON 或解析失败，直接返回（可能是文件路径、命令等）
+        return input;
+    }
+
+    /**
+     * 格式化 Agent 输入，提取关键信息
+     */
+    private String formatAgentInput(String toolInput) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(toolInput);
+            StringBuilder sb = new StringBuilder();
+
+            // 子代理类型
+            if (node.has("subagent_type")) {
+                sb.append("类型: `").append(node.get("subagent_type").asText()).append("`\n");
+            }
+
+            // 任务描述
+            if (node.has("prompt")) {
+                sb.append("任务: ").append(node.get("prompt").asText()).append("\n");
+            }
+
+            // 模型
+            if (node.has("model")) {
+                sb.append("模型: `").append(node.get("model").asText()).append("`\n");
+            }
+
+            return sb.toString().strip();
+        } catch (Exception e) {
+            // JSON 解析失败，返回原始输入
+            return toolInput;
+        }
+    }
+
+    /**
+     * 格式化 Agent 结果，美化显示
+     */
+    private String formatAgentResult(String result) {
+        if (result == null || result.isEmpty()) return "";
+
+        // 检查是否是 API Error
+        if (result.contains("API Error")) {
+            return formatApiError(result);
+        }
+
+        // 尝试解析为 JSON
+        if (result.trim().startsWith("{") || result.trim().startsWith("[")) {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(result);
+
+                // 如果是对象，提取关键字段
+                if (node.isObject()) {
+                    StringBuilder sb = new StringBuilder();
+
+                    // 结果摘要
+                    if (node.has("summary")) {
+                        sb.append("摘要: ").append(node.get("summary").asText()).append("\n");
+                    }
+
+                    // 完成状态
+                    if (node.has("status")) {
+                        sb.append("状态: ").append(node.get("status").asText()).append("\n");
+                    }
+
+                    // 结果内容
+                    if (node.has("result")) {
+                        sb.append("结果:\n```\n").append(node.get("result").asText()).append("\n```");
+                    }
+
+                    if (sb.length() > 0) {
+                        return sb.toString().strip();
+                    }
+                }
+            } catch (Exception e) {
+                // JSON 解析失败，使用原始结果
+            }
+        }
+
+        // 非 JSON 或解析失败，直接返回
+        return result;
+    }
+
+    /**
+     * 格式化 API 错误信息
+     */
+    private String formatApiError(String error) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("⚠️ **Agent 执行遇到 API 错误**\n\n");
+
+        // 解析错误类型和消息
+        // 格式: "API Error: 400 Param Incorrect"
+        if (error.startsWith("API Error:")) {
+            String errorContent = error.substring("API Error:".length()).trim();
+            String[] parts = errorContent.split(" ", 2);
+
+            if (parts.length >= 1) {
+                String errorCode = parts[0];
+                String errorMsg = parts.length > 1 ? parts[1] : "";
+
+                sb.append("```json\n");
+                sb.append("{\n");
+                sb.append("  \"error_code\": \"").append(errorCode).append("\",\n");
+                sb.append("  \"error_type\": \"").append(getErrorType(errorCode)).append("\",\n");
+                sb.append("  \"message\": \"").append(errorMsg.isEmpty() ? "参数错误" : errorMsg).append("\"\n");
+                sb.append("}\n");
+                sb.append("```\n\n");
+
+                sb.append("💡 **可能原因**: 子 Agent 调用参数不正确");
+            }
+        } else {
+            // 其他格式的 API 错误
+            sb.append("```\n").append(error).append("\n```\n\n");
+            sb.append("💡 **建议**: 检查 API 配置或稍后重试");
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 根据错误码获取错误类型描述
+     */
+    private String getErrorType(String errorCode) {
+        return switch (errorCode) {
+            case "400" -> "请求参数错误";
+            case "401" -> "认证失败";
+            case "403" -> "权限不足";
+            case "404" -> "资源不存在";
+            case "429" -> "请求过于频繁";
+            case "500" -> "服务器内部错误";
+            case "502" -> "网关错误";
+            case "503" -> "服务不可用";
+            default -> "未知错误";
+        };
     }
 
     public void handleMessage(String userId, String message, String contextToken) {

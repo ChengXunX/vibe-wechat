@@ -691,34 +691,63 @@ public class ClaudeApiService {
                                 String matchedToolName = toolUseId != null ? pendingToolUseIds.get(toolUseId) : null;
                                 // Agent 的 task_notification 走 onToolResult（去重）
                                 if ("Agent".equals(matchedToolName)) {
-                                    String summary = node.has("summary") ? node.get("summary").asText() : "";
-                                    // 提取 Agent 进度信息
-                                    String progress = "";
-                                    if (node.has("completed") && node.has("total")) {
-                                        int completed = node.get("completed").asInt();
-                                        int total = node.get("total").asInt();
-                                        progress = " [" + completed + "/" + total + "]";
+                                    // Agent 进度通知使用 isShowAgentCalls 配置
+                                    if (filterConfig.isShowAgentCalls()) {
+                                        String summary = node.has("summary") ? node.get("summary").asText() : "";
+                                        // 提取进度信息
+                                        String progress = "";
+                                        if (node.has("completed") && node.has("total")) {
+                                            int completed = node.get("completed").asInt();
+                                            int total = node.get("total").asInt();
+                                            progress = " [" + completed + "/" + total + "]";
+                                        }
+                                        // Agent 进度通知（只显示进行中，完成由 tool_result 处理）
+                                        StringBuilder sb = new StringBuilder();
+                                        sb.append("🤖 Agent 进行中").append(progress);
+                                        if (!summary.isEmpty()) {
+                                            sb.append("\n摘要: ").append(summary);
+                                        }
+                                        toolCallback.onSubtaskStatus(userId, sb.toString(), false, processIndex);
                                     }
-                                    toolCallback.onToolResult(userId, "Agent", toolUseId, summary + progress, processIndex);
                                 } else {
+                                    // 子任务通知使用 isShowSubtaskStatus/isShowSubtaskCompletion 配置
                                     String summary = node.has("summary") ? node.get("summary").asText() : "";
                                     String taskStatus = node.has("status") ? node.get("status").asText() : "";
                                     boolean isCompleted = "completed".equals(taskStatus);
-                                    // 提取进度信息
-                                    String progress = "";
-                                    if (node.has("completed") && node.has("total")) {
-                                        int completed = node.get("completed").asInt();
-                                        int total = node.get("total").asInt();
-                                        progress = " [" + completed + "/" + total + "]";
+                                    boolean shouldNotify = isCompleted ? filterConfig.isShowSubtaskCompletion() : filterConfig.isShowSubtaskStatus();
+                                    if (shouldNotify) {
+                                        // 提取进度信息
+                                        String progress = "";
+                                        if (node.has("completed") && node.has("total")) {
+                                            int completed = node.get("completed").asInt();
+                                            int total = node.get("total").asInt();
+                                            progress = " [" + completed + "/" + total + "]";
+                                        }
+                                        String statusText = isCompleted
+                                                ? "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary)
+                                                : "🔄 子任务 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                        toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
                                     }
-                                    String statusText = isCompleted
-                                            ? "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary)
-                                            : "🔄 子任务 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
-                                    toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
                                 }
                             } else if ("task_started".equals(subtype)) {
+                                String toolUseId = node.has("tool_use_id") ? node.get("tool_use_id").asText() : null;
+                                String matchedToolName = toolUseId != null ? pendingToolUseIds.get(toolUseId) : null;
                                 String description = node.has("description") ? node.get("description").asText() : "";
-                                toolCallback.onSubtaskStatus(userId, "📋 子任务开始" + (description.isEmpty() ? "" : ": " + description), false, processIndex);
+                                // Agent 创建使用 isShowAgentCalls 配置，TaskCreate 使用 isShowSubtaskStatus 配置
+                                boolean isAgent = "Agent".equals(matchedToolName);
+                                if (isAgent && !filterConfig.isShowAgentCalls()) {
+                                    // Agent 通知被过滤，跳过
+                                } else if (!isAgent && !filterConfig.isShowSubtaskStatus()) {
+                                    // 子任务通知被过滤，跳过
+                                } else {
+                                    String statusText;
+                                    if (isAgent) {
+                                        statusText = "🤖 创建Agent进程" + (description.isEmpty() ? "" : ": " + description);
+                                    } else {
+                                        statusText = "📋 子任务开始" + (description.isEmpty() ? "" : ": " + description);
+                                    }
+                                    toolCallback.onSubtaskStatus(userId, statusText, false, processIndex);
+                                }
                             }
                         }
                     }
@@ -1575,7 +1604,16 @@ public class ClaudeApiService {
                     subtaskTotalCounters.merge(queueKey, 1, Integer::sum);
                     int total = subtaskTotalCounters.get(queueKey);
                     int completed = subtaskCompletedCounters.getOrDefault(queueKey, 0);
-                    yield "📋 创建子任务 [" + completed + "/" + total + "]: " + subject;
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("📋 创建子任务 [").append(completed).append("/").append(total).append("]\n");
+                    sb.append("标题: ").append(subject);
+                    if (inputNode.has("description")) {
+                        String desc = inputNode.get("description").asText();
+                        if (!desc.isEmpty()) {
+                            sb.append("\n描述: ").append(desc);
+                        }
+                    }
+                    yield sb.toString();
                 }
                 case "TaskUpdate" -> {
                     String status = inputNode.has("status") ? inputNode.get("status").asText() : "更新";
@@ -1589,7 +1627,33 @@ public class ClaudeApiService {
                         log.debug("Subtask queue[{}] poll: {}, remaining={}", queueKey, subject, queue.size());
                         yield "✅ 子任务完成 [" + completed + "/" + total + "]" + (subject == null || subject.isEmpty() ? "" : ": " + subject);
                     }
-                    yield "🔄 子任务 " + status + " [" + completed + "/" + total + "]" + (subject == null || subject.isEmpty() ? "" : ": " + subject);
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("🔄 子任务 ").append(status).append(" [").append(completed).append("/").append(total).append("]");
+                    if (subject != null && !subject.isEmpty()) {
+                        sb.append("\n标题: ").append(subject);
+                    }
+                    // 显示添加的阻塞/被阻塞任务
+                    if (inputNode.has("addBlocks") && inputNode.get("addBlocks").isArray()) {
+                        com.fasterxml.jackson.databind.JsonNode blocks = inputNode.get("addBlocks");
+                        if (blocks.size() > 0) {
+                            sb.append("\n阻塞: ");
+                            for (int i = 0; i < blocks.size(); i++) {
+                                if (i > 0) sb.append(", ");
+                                sb.append("#").append(blocks.get(i).asText());
+                            }
+                        }
+                    }
+                    if (inputNode.has("addBlockedBy") && inputNode.get("addBlockedBy").isArray()) {
+                        com.fasterxml.jackson.databind.JsonNode blockedBy = inputNode.get("addBlockedBy");
+                        if (blockedBy.size() > 0) {
+                            sb.append("\n被阻塞: ");
+                            for (int i = 0; i < blockedBy.size(); i++) {
+                                if (i > 0) sb.append(", ");
+                                sb.append("#").append(blockedBy.get(i).asText());
+                            }
+                        }
+                    }
+                    yield sb.toString();
                 }
                 case "TaskGet" -> "📖 查看子任务: " + (inputNode.has("taskId") ? inputNode.get("taskId").asText() : "");
                 case "TaskList" -> "📋 列出所有子任务";

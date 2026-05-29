@@ -20,8 +20,8 @@ public class QuotaManager {
         int runningProcesses = 0;
 
         synchronized int getAvailable() {
-            // 可用配额 = 10 - 已用 - 运行中的进程（每个忙碌进程占用一条配额）
-            return MESSAGE_LIMIT - totalUsed - runningProcesses;
+            // 可用配额 = 10 - 已用 - 待返回结果数（每个待返回结果占用一条配额）
+            return MESSAGE_LIMIT - totalUsed - reservedForResult;
         }
     }
 
@@ -114,7 +114,7 @@ public class QuotaManager {
         if (q == null) return "无数据";
         synchronized (q) {
             int available = q.getAvailable();
-            int reserved = Math.min(q.runningProcesses, MESSAGE_LIMIT - 1);
+            int reserved = Math.min(q.reservedForResult, MESSAGE_LIMIT - 1);
             return String.format("已用:%d, 预留:%d, 可用:%d (共10条)",
                     q.totalUsed, reserved, available);
         }
