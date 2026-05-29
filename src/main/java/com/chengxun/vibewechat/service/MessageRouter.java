@@ -932,6 +932,12 @@ public class MessageRouter {
     }
 
     private void handleClaudeCommand(String userId, String command, String contextToken) {
+        // /btw 命令：临时进程处理，不影响当前任务
+        if (command.startsWith("/btw ")) {
+            handleBtwCommand(userId, command, contextToken);
+            return;
+        }
+
         ilinkService.sendTyping(userId);
         quotaManager.reserveForResult(userId);
         try {
@@ -949,6 +955,54 @@ public class MessageRouter {
             quotaManager.recordMessageSent(userId, "result");
             ilinkService.sendStopTyping(userId);
         }
+    }
+
+    /**
+     * /btw 命令：临时进程处理，不影响当前任务
+     * 用法: /btw <消息内容>
+     */
+    private void handleBtwCommand(String userId, String command, String contextToken) {
+        // 提取消息内容（去掉 "/btw " 前缀）
+        String message = command.substring(5).trim();
+        if (message.isEmpty()) {
+            ilinkService.sendText(userId, "用法: `/btw <消息内容>`\n\n临时发送消息给 Claude，不影响当前正在执行的任务", contextToken);
+            return;
+        }
+
+        // 异步处理，不阻塞
+        CompletableFuture.runAsync(() -> {
+            ilinkService.sendTyping(userId);
+            try {
+                String response = claudeApiService.sendBtwMessage(userId, message);
+                if (response != null && !response.isEmpty()) {
+                    // 格式化结果，走单独的 markdown 模板
+                    String formatted = formatBtwResponse(message, response);
+                    ilinkService.sendText(userId, formatted, contextToken);
+                } else {
+                    ilinkService.sendText(userId, "💬 /btw 命令执行完成（无输出）", contextToken);
+                }
+            } catch (Exception e) {
+                ilinkService.sendText(userId, "❌ /btw 执行失败: " + e.getMessage(), contextToken);
+            } finally {
+                ilinkService.sendStopTyping(userId);
+            }
+        });
+    }
+
+    /**
+     * 格式化 /btw 响应，markdown 模板
+     */
+    private String formatBtwResponse(String originalMessage, String response) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("💬 **BTW 回复**\n\n");
+        // 截断过长的原始消息
+        String shortMessage = originalMessage.length() > 50
+                ? originalMessage.substring(0, 50) + "..."
+                : originalMessage;
+        sb.append("> ").append(shortMessage).append("\n\n");
+        sb.append("---\n\n");
+        sb.append(response);
+        return sb.toString();
     }
 
     private void handleProcessStatus(String userId, String contextToken) {
@@ -976,6 +1030,14 @@ public class MessageRouter {
                 | `v-status` | 查看系统完整状态 |
                 | `v-processes` | 查看进程列表和状态 |
                 | `v-refresh` | 刷新消息配额（10条/24h） |
+
+                ---
+
+                **💬 特殊命令**
+
+                | 命令 | 说明 |
+                |------|------|
+                | `/btw <消息>` | 临时发送消息给 Claude，不影响当前正在执行的任务 |
 
                 ---
 

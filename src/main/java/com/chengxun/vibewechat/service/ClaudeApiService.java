@@ -2029,6 +2029,130 @@ public class ClaudeApiService {
     }
 
     /**
+     * /btw 命令：临时进程处理，不影响当前任务
+     * 启动独立进程，使用 --resume 恢复 session，发送消息并返回结果
+     * 不进入进程池，不消耗配额，不更新 sessionIds
+     * @param userId 用户ID
+     * @param message 消息内容
+     * @return 响应文本，失败返回错误信息
+     */
+    public String sendBtwMessage(String userId, String message) {
+        String sessionId = sessionIds.get(userId);
+        if (sessionId == null) {
+            return "❌ 当前没有活跃会话，无法使用 /btw";
+        }
+
+        String installPath = claudeConfig.getInstallPath();
+        if (installPath == null || installPath.isEmpty()) {
+            return "❌ Claude 安装路径未配置";
+        }
+
+        try {
+            List<String> command = new ArrayList<>();
+            command.add(installPath);
+            command.add("--print");
+            command.add("--input-format");
+            command.add("text");
+            command.add("--output-format");
+            command.add("text");
+            command.add("--resume");
+            command.add(sessionId);
+
+            // 模型配置
+            String model = claudeConfig.getModel();
+            if (model != null && !model.isEmpty()) {
+                command.add("--model");
+                command.add(model);
+            }
+
+            // 工作目录
+            String workDir = claudeConfig.getWorkDir();
+            if (workDir == null || workDir.isEmpty()) {
+                workDir = System.getProperty("user.dir");
+            }
+
+            log.info("BTW: Starting temporary process for user: {}, session: {}", userId, sessionId);
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.redirectErrorStream(false);
+            if (workDir != null && !workDir.isEmpty()) {
+                pb.directory(new java.io.File(workDir));
+            }
+
+            Process process = pb.start();
+
+            // 发送消息
+            process.getOutputStream().write((message + "\n").getBytes());
+            process.getOutputStream().flush();
+            process.getOutputStream().close();
+
+            // 读取输出
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.isEmpty()) continue;
+                    // 尝试解析 JSON（stream-json 格式）
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(line);
+                        String type = node.has("type") ? node.get("type").asText() : "";
+                        if ("result".equals(type)) {
+                            // 提取 result 内容
+                            if (node.has("result")) {
+                                output.append(node.get("result").asText());
+                            } else if (node.has("content") && node.get("content").isArray()) {
+                                for (com.fasterxml.jackson.databind.JsonNode item : node.get("content")) {
+                                    if (item.has("text")) {
+                                        output.append(item.get("text").asText());
+                                    }
+                                }
+                            }
+                            break;
+                        } else if ("assistant".equals(type)) {
+                            // 提取 assistant 消息
+                            if (node.has("message")) {
+                                com.fasterxml.jackson.databind.JsonNode messageNode = node.get("message");
+                                if (messageNode.has("content") && messageNode.get("content").isArray()) {
+                                    for (com.fasterxml.jackson.databind.JsonNode item : messageNode.get("content")) {
+                                        if ("text".equals(item.get("type").asText())) {
+                                            output.append(item.get("text").asText());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Exception e) {
+                        // 非 JSON 行，可能是纯文本输出
+                        output.append(line).append("\n");
+                    }
+                }
+            }
+
+            // 等待进程完成
+            boolean finished = process.waitFor(180, TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("BTW: Process timed out for user: {}", userId);
+                return "❌ /btw 命令执行超时（180秒）";
+            }
+
+            int exitCode = process.exitValue();
+            log.info("BTW: Process completed for user: {}, exit code: {}, output length: {}",
+                    userId, exitCode, output.length());
+
+            if (output.length() == 0) {
+                return "💬 /btw 命令执行完成（无输出）";
+            }
+
+            return output.toString().trim();
+
+        } catch (Exception e) {
+            log.error("BTW: Failed for user: {}", userId, e);
+            return "❌ /btw 执行异常: " + e.getMessage();
+        }
+    }
+
+    /**
      * 调用 Claude CLI 生成上下文摘要（阻塞调用）
      * 独立进程，不复用 Worker，仅用于压缩时快速生成摘要
      * 使用 json 输出格式以提取 token 用量
