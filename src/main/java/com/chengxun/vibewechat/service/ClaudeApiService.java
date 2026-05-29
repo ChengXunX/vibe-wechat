@@ -523,16 +523,6 @@ public class ClaudeApiService {
                 }
             }
 
-            // mimo 模型不支持 Explore 类型子 Agent，明确告知 Claude 使用其他替代方案
-            String model = claudeConfig.getModel();
-            if (model != null && model.toLowerCase().contains("mimo")) {
-                effectiveMessage = "[模型限制提示] 当前使用的 mimo 模型不支持 Explore 类型的子Agent。"
-                        + "当你需要搜索代码、定位文件或探索代码库时，请直接使用 grep、find、Read 等工具自行完成，"
-                        + "或者使用 Plan、general-purpose 等其他类型的子Agent，不要使用 Explore 子Agent。\n\n"
-                        + "[用户消息] " + effectiveMessage;
-                log.info("Prepended mimo model limitation hint for user: {}", userId);
-            }
-
             // 通过 stdin 发送消息（text 格式，纯文本）
             log.info("Sending message to Claude stdin for user {}: {}", userId, effectiveMessage.length() > 200 ? effectiveMessage.substring(0, 200) + "..." : effectiveMessage);
             cp.stdin.write((effectiveMessage + "\n").getBytes());
@@ -601,6 +591,11 @@ public class ClaudeApiService {
                                                     toolCallback.onSubtaskStatus(userId, subtaskStatus, isCompleted, processIndex);
                                                 }
                                             }
+                                        }
+                                    } else if ("thinking".equals(itemType)) {
+                                        String thinking = item.get("thinking").asText();
+                                        if (toolCallback != null && !thinking.isEmpty()) {
+                                            toolCallback.onThinking(userId, thinking, processIndex);
                                         }
                                     }
                                 }
@@ -1620,6 +1615,7 @@ public class ClaudeApiService {
         void onToolResult(String userId, String toolName, String toolUseId, String result, int processIndex);
         void onSubtaskStatus(String userId, String status, boolean isCompleted, int processIndex);
         void onDecisionMessage(String userId, String message);
+        default void onThinking(String userId, String thinking, int processIndex) {}
     }
 
     private ToolCallback toolCallback;

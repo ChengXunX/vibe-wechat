@@ -37,6 +37,8 @@ public class MessageRouter {
     private final Map<String, Thread> activeTypingThreads = new ConcurrentHashMap<>();
     // 记录已发送完成通知的 tool_use_id（task_notification 和 tool_result 去重）
     private final java.util.Set<String> completedToolUseIds = ConcurrentHashMap.newKeySet();
+    // 记录失败的 Agent tool_use_id -> 错误信息（等待 thinking 降级通知）
+    private final Map<String, String> failedAgentErrors = new ConcurrentHashMap<>();
 
     private static final String V_PREFIX = "v-";
     private static final String V_HELP = "v-help";
@@ -181,6 +183,17 @@ public class MessageRouter {
                     return;
                 }
 
+                // AskUserQuestion 工具（决策点）
+                if ("AskUserQuestion".equals(toolName)) {
+                    if (!filterConfig.isShowAgentCalls()) return;
+                    if (!quotaManager.canSendToolMessage(userId)) return;
+                    String contextToken = userContextTokens.get(userId);
+                    String decisionInfo = formatAskUserQuestion(toolInput);
+                    ilinkService.sendText(userId, decisionInfo + procTag, contextToken != null ? contextToken : "", "tool");
+                    quotaManager.recordMessageSent(userId, "tool");
+                    return;
+                }
+
                 // 根据工具类型检查对应的过滤开关
                 boolean allowed = false;
                 if (isFileReadTool(toolName)) {
@@ -221,6 +234,16 @@ public class MessageRouter {
                     if (!filterConfig.isShowAgentCompletion()) return;
                     if (completedToolUseIds.contains(toolUseId)) return;
                     completedToolUseIds.add(toolUseId);
+
+                    // 检测 Agent 错误，标记为 pending 等待 thinking 降级通知
+                    boolean isError = result.contains("API Error") || result.contains("400")
+                            || result.contains("error") || result.contains("Error");
+                    if (isError && toolUseId != null) {
+                        failedAgentErrors.put(toolUseId, result.trim());
+                        log.info("Agent error detected for tool_use_id: {}, deferring notification", toolUseId);
+                        return;
+                    }
+
                     if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
                     String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
@@ -254,9 +277,117 @@ public class MessageRouter {
 
             @Override
             public void onDecisionMessage(String userId, String message) {
-                // 决策消息不直接发送给用户，由最终结果统一返回
+                // 检测决策类内容，美化后通知用户
+                if (!isDecisionMessage(message)) return;
+                if (!filterConfig.isShowAgentCalls()) return;
+                if (!quotaManager.canSendToolMessage(userId)) return;
+                String contextToken = userContextTokens.get(userId);
+                String formatted = formatDecisionMessage(message);
+                ilinkService.sendText(userId, formatted, contextToken != null ? contextToken : "", "tool");
+                quotaManager.recordMessageSent(userId, "tool");
+            }
+
+            @Override
+            public void onThinking(String userId, String thinking, int processIndex) {
+                // 如果有失败的 Agent，发送降级重试通知（含失败原因）
+                if (!failedAgentErrors.isEmpty()) {
+                    String errorDetail = String.join("\n", failedAgentErrors.values());
+                    failedAgentErrors.clear();
+                    if (!filterConfig.isShowAgentCalls()) return;
+                    if (!quotaManager.canSendToolMessage(userId)) return;
+                    String contextToken = userContextTokens.get(userId);
+                    String procTag = processIndex > 0 ? " `[进程" + processIndex + "]`" : "";
+                    String msg = "⚠️ Agent 调用失败，正在降级重试..." + procTag
+                            + "\n原因: " + errorDetail;
+                    ilinkService.sendText(userId, msg, contextToken != null ? contextToken : "", "tool");
+                    quotaManager.recordMessageSent(userId, "tool");
+                }
             }
         });
+    }
+
+    /**
+     * 检测是否为决策类消息（AI 在展示选项、方案让用户选择）
+     */
+    private boolean isDecisionMessage(String message) {
+        if (message == null || message.length() < 20) return false;
+        // 包含明确的选择/方案关键词
+        return message.contains("请选择") || message.contains("选哪个")
+                || message.contains("方案1") || message.contains("方案一")
+                || message.contains("选项") || message.contains("你想要")
+                || message.contains("你想") && message.contains("还是")
+                || message.contains("Which") || message.contains("choose")
+                || (message.contains("？") && (message.contains("方案") || message.contains("方式") || message.contains("Approach")));
+    }
+
+    /**
+     * 美化决策消息，提取选项并添加自动决策提示
+     */
+    private String formatDecisionMessage(String message) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🤔 AI 正在决策：\n");
+
+        // 提取编号选项（1. xxx 2. xxx 或 - xxx）
+        String[] lines = message.split("\n");
+        boolean hasOptions = false;
+        for (String line : lines) {
+            String trimmed = line.trim();
+            // 匹配 "1. " "1、" "- " "* " 开头的选项行
+            if (trimmed.matches("^\\d+[.、)：:].+")
+                    || trimmed.matches("^[-*•]\\s.+")
+                    || trimmed.matches("^\\*\\*.+\\*\\*$")) {
+                // 去掉 markdown 加粗符号，简化显示
+                String clean = trimmed.replaceAll("\\*\\*", "").replaceAll("`", "");
+                sb.append("  ").append(clean).append("\n");
+                hasOptions = true;
+            }
+        }
+
+        // 如果没提取到选项，截取前200字符作为摘要
+        if (!hasOptions) {
+            String summary = message.length() > 200 ? message.substring(0, 200) + "..." : message;
+            summary = summary.replaceAll("\\*\\*", "").replaceAll("`", "").replaceAll("\\n+", " ");
+            sb.append("  ").append(summary).append("\n");
+        }
+
+        sb.append("\n⚡ AI 将自动决策，如需干预请切换到该进程发送 v-stop");
+        return sb.toString();
+    }
+
+    /**
+     * 格式化 AskUserQuestion 工具输入，展示问题和选项
+     */
+    private String formatAskUserQuestion(String toolInput) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🤔 AI 需要您决策：\n");
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode input = mapper.readTree(toolInput);
+            if (input.has("questions") && input.get("questions").isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode q : input.get("questions")) {
+                    String question = q.has("question") ? q.get("question").asText() : "";
+                    sb.append("\n❓ ").append(question).append("\n");
+                    if (q.has("options") && q.get("options").isArray()) {
+                        int idx = 1;
+                        for (com.fasterxml.jackson.databind.JsonNode opt : q.get("options")) {
+                            String label = opt.has("label") ? opt.get("label").asText() : "";
+                            String desc = opt.has("description") ? opt.get("description").asText() : "";
+                            sb.append("  ").append(idx++).append(". ").append(label);
+                            if (!desc.isEmpty()) {
+                                sb.append(" - ").append(desc);
+                            }
+                            sb.append("\n");
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // JSON 解析失败，截取原文
+            String summary = toolInput.length() > 200 ? toolInput.substring(0, 200) + "..." : toolInput;
+            sb.append("  ").append(summary).append("\n");
+        }
+        sb.append("\n⚡ AI 将自动决策，如需干预请切换到该进程发送 v-stop");
+        return sb.toString();
     }
 
     private boolean isFileReadTool(String toolName) {
