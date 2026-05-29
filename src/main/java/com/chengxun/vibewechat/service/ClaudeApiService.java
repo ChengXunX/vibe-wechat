@@ -440,6 +440,7 @@ public class ClaudeApiService {
                 future.completeExceptionally(e);
             } finally {
                 cp.busy = false;
+                clearSubtaskProgressForProcess(userId, getProcessIndex(userId, cp));
                 processNextInQueue(userId);
                 checkAndApplyDeferredRestart(userId);
             }
@@ -483,6 +484,7 @@ public class ClaudeApiService {
                 future.completeExceptionally(e);
             } finally {
                 cp.busy = false;
+                clearSubtaskProgressForProcess(userId, processIndex);
                 processNextInQueue(userId);
                 checkAndApplyDeferredRestart(userId);
             }
@@ -1715,6 +1717,14 @@ public class ClaudeApiService {
         subtaskTotalCounters.entrySet().removeIf(e -> e.getKey().startsWith(userId + ":"));
         subtaskCompletedCounters.entrySet().removeIf(e -> e.getKey().startsWith(userId + ":"));
         log.debug("Cleared subtask progress for user: {}", userId);
+    }
+
+    private void clearSubtaskProgressForProcess(String userId, int processIndex) {
+        String queueKey = userId + ":" + processIndex;
+        subtaskQueues.remove(queueKey);
+        subtaskTotalCounters.remove(queueKey);
+        subtaskCompletedCounters.remove(queueKey);
+        log.debug("Cleared subtask progress for process: {}", queueKey);
     }
 
     // ==================== 路径检测和配置加载 ====================
