@@ -2057,6 +2057,8 @@ public class ClaudeApiService {
             command.add("text");
             command.add("--resume");
             command.add(sessionId);
+            command.add("--fork-session");
+            command.add("--no-session-persistence");
 
             // 模型配置
             String model = claudeConfig.getModel();
