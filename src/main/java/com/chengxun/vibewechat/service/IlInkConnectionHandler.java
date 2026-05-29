@@ -172,13 +172,15 @@ public class IlInkConnectionHandler {
             return;
         }
 
-        // 计算预留配额：为正在处理的消息预留1条结果通知
-        // 当有忙碌进程时，预留1条；否则预留0条
+        // 计算预留配：为每个忙碌进程预留1条结果通知
+        // 预留数量 = 所有忙碌中进程数量
         int busyProcesses = quotaManager.getRunningProcesses(userId);
-        int reservedQuota = Math.min(busyProcesses, 1);  // 最多预留1条
+        int reservedQuota = busyProcesses;  // 每个忙碌进程预留1条
         int remaining = MESSAGE_LIMIT - currentCount - reservedQuota;
+        // 开始提醒的消息序数 = max(1, 10 - busyProcesses)
+        int warningThreshold = Math.max(1, MESSAGE_LIMIT - busyProcesses);
         String finalText = text;
-        if (!isUnlimitedType && remaining <= 0) {
+        if (!isUnlimitedType && currentCount >= warningThreshold) {
             String warning = text + "\n\n⚠️ 消息即将达上限（已用 " + currentCount + " + 预留 " + reservedQuota + "）\n后续工具通知将屏蔽，发送 v-refresh 可刷新配额";
             finalText = warning;
         }

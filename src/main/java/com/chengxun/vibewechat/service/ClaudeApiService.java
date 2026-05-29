@@ -721,11 +721,11 @@ public class ClaudeApiService {
                                         toolCallback.onSubtaskStatus(userId, sb.toString(), false, processIndex);
                                     }
                                 } else {
-                                    // 子任务通知使用 isShowSubtaskStatus/isShowSubtaskCompletion 配置
+                                    // 子环节通知使用 isShowSubStepStatus 配置
                                     String summary = node.has("summary") ? node.get("summary").asText() : "";
                                     String taskStatus = node.has("status") ? node.get("status").asText() : "";
                                     boolean isCompleted = "completed".equals(taskStatus);
-                                    boolean shouldNotify = isCompleted ? filterConfig.isShowSubtaskCompletion() : filterConfig.isShowSubtaskStatus();
+                                    boolean shouldNotify = filterConfig.isShowSubStepStatus();
                                     if (shouldNotify) {
                                         // 提取进度信息
                                         String progress = "";
@@ -741,14 +741,14 @@ public class ClaudeApiService {
                                             String statusText;
                                             if (isQuickTask) {
                                                 // 快速任务：合并显示
-                                                statusText = "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                                statusText = "✅ 子环节完成" + progress + (summary.isEmpty() ? "" : ": " + summary);
                                             } else {
                                                 // 普通任务：只显示完成
-                                                statusText = "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                                statusText = "✅ 子环节完成" + progress + (summary.isEmpty() ? "" : ": " + summary);
                                             }
                                             toolCallback.onSubtaskStatus(userId, statusText, true, processIndex);
                                         } else {
-                                            String statusText = "🔄 子任务 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                            String statusText = "🔄 子环节 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
                                             toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
                                         }
                                     }
@@ -757,12 +757,12 @@ public class ClaudeApiService {
                                 String toolUseId = node.has("tool_use_id") ? node.get("tool_use_id").asText() : null;
                                 String matchedToolName = toolUseId != null ? pendingToolUseIds.get(toolUseId) : null;
                                 String description = node.has("description") ? node.get("description").asText() : "";
-                                // Agent 创建使用 isShowAgentCalls 配置，TaskCreate 使用 isShowSubtaskStatus 配置
+                                // Agent 创建使用 isShowAgentCalls 配置，子环节使用 isShowSubStepStatus 配置
                                 boolean isAgent = "Agent".equals(matchedToolName);
                                 if (isAgent && !filterConfig.isShowAgentCalls()) {
                                     // Agent 通知被过滤，跳过
-                                } else if (!isAgent && !filterConfig.isShowSubtaskStatus()) {
-                                    // 子任务通知被过滤，跳过
+                                } else if (!isAgent && !filterConfig.isShowSubStepStatus()) {
+                                    // 子环节通知被过滤，跳过
                                 } else {
                                     // 记录开始时间，延迟发送开始通知
                                     if (toolUseId != null) {
@@ -773,7 +773,7 @@ public class ClaudeApiService {
                                         statusText = "🤖 创建Agent进程" + (description.isEmpty() ? "" : ": " + description);
                                         toolCallback.onSubtaskStatus(userId, statusText, false, processIndex);
                                     } else {
-                                        statusText = "📋 子任务开始" + (description.isEmpty() ? "" : ": " + description);
+                                        statusText = "📋 子环节开始" + (description.isEmpty() ? "" : ": " + description);
                                         // 延迟发送开始通知，如果是快速任务会在完成时合并
                                         final String finalStatusText = statusText;
                                         final int finalProcessIndex = processIndex;

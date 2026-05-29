@@ -72,6 +72,7 @@ public class MessageRouter {
     private static final String V_AGENT = "v-agent";
     private static final String V_AGENT_DONE = "v-agent-done";
     private static final String V_PLAN = "v-plan";
+    private static final String V_SUBSTEP = "v-substep";
     private static final String V_PROCESSES = "v-processes";
     private static final String V_MAXPROC = "v-maxproc";
     private static final String V_IDLE = "v-idle";
@@ -826,6 +827,7 @@ public class MessageRouter {
             case V_AGENT -> handleQuickToggle(userId, "agent", parts, contextToken);
             case V_AGENT_DONE -> handleQuickToggle(userId, "agent-done", parts, contextToken);
             case V_PLAN -> handleQuickToggle(userId, "plan", parts, contextToken);
+            case V_SUBSTEP -> handleQuickToggle(userId, "substep", parts, contextToken);
             case V_TOKEN -> {
                 if (parts.length > 1) {
                     handleQuickToggle(userId, "token", parts, contextToken);
@@ -1059,6 +1061,7 @@ public class MessageRouter {
                 | `v-fileedit <true/false>` | 文件编辑通知 |
                 | `v-subtask <true/false>` | 子任务状态通知 |
                 | `v-subtask-done <true/false>` | 子任务完成通知 |
+                | `v-substep <true/false>` | 子环节通知 |
                 | `v-agent <true/false>` | Agent 开始通知 |
                 | `v-agent-done <true/false>` | Agent 完成通知 |
                 | `v-plan <true/false>` | 规划模式通知 |
@@ -1145,6 +1148,7 @@ public class MessageRouter {
                 | 文件编辑 | %s | `v-fileedit` |
                 | 子任务状态 | %s | `v-subtask` |
                 | 子任务完成 | %s | `v-subtask-done` |
+                | 子环节 | %s | `v-substep` |
                 | Agent 开始 | %s | `v-agent` |
                 | Agent 完成 | %s | `v-agent-done` |
                 | 规划模式 | %s | `v-plan` |
@@ -1179,6 +1183,7 @@ public class MessageRouter {
                 filterConfig.isShowFileEdit() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowSubtaskStatus() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowSubtaskCompletion() ? "✅ 开" : "❌ 关",
+                filterConfig.isShowSubStepStatus() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowAgentCalls() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowAgentCompletion() ? "✅ 开" : "❌ 关",
                 filterConfig.isShowPlanMode() ? "✅ 开" : "❌ 关",
@@ -1237,6 +1242,7 @@ public class MessageRouter {
             case "agent" -> filterConfig.setShowAgentCalls(newValue);
             case "agent-done" -> filterConfig.setShowAgentCompletion(newValue);
             case "plan" -> filterConfig.setShowPlanMode(newValue);
+            case "substep" -> filterConfig.setShowSubStepStatus(newValue);
         }
         configService.saveConfig();
         ilinkService.sendText(userId, type + " = " + (newValue ? "on" : "off"), contextToken);

@@ -23,6 +23,7 @@ public class FilterConfig {
     private boolean showAgentCalls = true;
     private boolean showAgentCompletion = true;
     private boolean showPlanMode = true;
+    private boolean showSubStepStatus = true;
     private int maxMessagesPerUser = 10;
     private List<String> blockedKeywords = new CopyOnWriteArrayList<>();
 }
