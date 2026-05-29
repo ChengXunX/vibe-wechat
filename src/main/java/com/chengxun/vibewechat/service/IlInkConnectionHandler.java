@@ -172,16 +172,14 @@ public class IlInkConnectionHandler {
             return;
         }
 
-        // 计算预留配额：每个待返回结果占一条配额，最多预留9条（至少保留1条通知）
-        int pendingResults = quotaManager.getReservedQuota(userId);
-        int reservedQuota = Math.min(pendingResults, MESSAGE_LIMIT - 1);
+        // 计算预留配额：为正在处理的消息预留1条结果通知
+        // 当有忙碌进程时，预留1条；否则预留0条
+        int busyProcesses = quotaManager.getRunningProcesses(userId);
+        int reservedQuota = Math.min(busyProcesses, 1);  // 最多预留1条
         int remaining = MESSAGE_LIMIT - currentCount - reservedQuota;
         String finalText = text;
-        if (!isUnlimitedType && remaining <= 1) {
-            String warning = text + "\n\n⚠️ 消息即将达上限（已用 " + currentCount + " + 预留 " + reservedQuota + " = " + (currentCount + reservedQuota) + "/" + MESSAGE_LIMIT + "）\n剩余: " + remaining + " 条 | 后续工具通知将屏蔽\n发送 v-refresh 可刷新配额";
-            if (pendingResults >= MESSAGE_LIMIT - 1) {
-                warning += "\n\n⚠️ 待返回结果过多（" + pendingResults + "个），建议使用 v-refresh 释放配额";
-            }
+        if (!isUnlimitedType && remaining <= 0) {
+            String warning = text + "\n\n⚠️ 消息即将达上限（已用 " + currentCount + " + 预留 " + reservedQuota + "）\n后续工具通知将屏蔽，发送 v-refresh 可刷新配额";
             finalText = warning;
         }
 

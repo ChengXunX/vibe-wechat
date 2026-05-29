@@ -171,10 +171,11 @@ public class MessageRouter {
                     if (!filterConfig.isShowPlanMode()) return;
                     if (!quotaManager.canSendToolMessage(userId)) return;
                     String contextToken = userContextTokens.get(userId);
+                    String planInfo = formatPlanModeInput(toolName, toolInput);
                     if ("EnterPlanMode".equals(toolName)) {
-                        ilinkService.sendText(userId, "📋 进入规划模式" + procTag, contextToken != null ? contextToken : "", "tool");
+                        ilinkService.sendText(userId, "📋 进入规划模式" + procTag + "\n" + planInfo, contextToken != null ? contextToken : "", "tool");
                     } else {
-                        ilinkService.sendText(userId, "✅ 退出规划模式" + procTag, contextToken != null ? contextToken : "", "tool");
+                        ilinkService.sendText(userId, "✅ 退出规划模式" + procTag + "\n" + planInfo, contextToken != null ? contextToken : "", "tool");
                     }
                     quotaManager.recordMessageSent(userId, "tool");
                     return;
@@ -309,6 +310,54 @@ public class MessageRouter {
     }
 
     /**
+     * 格式化规划模式输入，提取关键信息
+     */
+    private String formatPlanModeInput(String toolName, String toolInput) {
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(toolInput);
+            StringBuilder sb = new StringBuilder();
+
+            if ("EnterPlanMode".equals(toolName)) {
+                // 进入规划模式的参数
+                if (node.has("reason")) {
+                    sb.append("**原因**: ").append(node.get("reason").asText()).append("\n");
+                }
+                if (node.has("description")) {
+                    sb.append("**描述**: ").append(node.get("description").asText()).append("\n");
+                }
+                if (node.has("allowedPrompts") && node.get("allowedPrompts").isArray()) {
+                    sb.append("**允许的操作**:\n");
+                    for (com.fasterxml.jackson.databind.JsonNode prompt : node.get("allowedPrompts")) {
+                        if (prompt.has("prompt")) {
+                            sb.append("- ").append(prompt.get("prompt").asText()).append("\n");
+                        }
+                    }
+                }
+            } else {
+                // ExitPlanMode - 显示规划结果
+                if (node.has("plan")) {
+                    sb.append("**规划方案**:\n\n");
+                    sb.append(node.get("plan").asText()).append("\n");
+                }
+                if (node.has("allowedPrompts") && node.get("allowedPrompts").isArray()) {
+                    sb.append("\n**执行权限**:\n");
+                    for (com.fasterxml.jackson.databind.JsonNode prompt : node.get("allowedPrompts")) {
+                        if (prompt.has("tool") && prompt.has("prompt")) {
+                            sb.append("- `").append(prompt.get("tool").asText()).append("`: ").append(prompt.get("prompt").asText()).append("\n");
+                        }
+                    }
+                }
+            }
+
+            return sb.toString().strip();
+        } catch (Exception e) {
+            // JSON 解析失败，返回空
+            return "";
+        }
+    }
+
+    /**
      * 格式化 Agent 输入，提取关键信息
      */
     private String formatAgentInput(String toolInput) {
@@ -317,19 +366,39 @@ public class MessageRouter {
             com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(toolInput);
             StringBuilder sb = new StringBuilder();
 
-            // 子代理类型
-            if (node.has("subagent_type")) {
-                sb.append("类型: `").append(node.get("subagent_type").asText()).append("`\n");
+            // 任务描述（标题）
+            if (node.has("description")) {
+                sb.append("**任务**: ").append(node.get("description").asText()).append("\n");
             }
 
-            // 任务描述
-            if (node.has("prompt")) {
-                sb.append("任务: ").append(node.get("prompt").asText()).append("\n");
+            // 子代理类型
+            if (node.has("subagent_type")) {
+                sb.append("**类型**: `").append(node.get("subagent_type").asText()).append("`\n");
             }
 
             // 模型
             if (node.has("model")) {
-                sb.append("模型: `").append(node.get("model").asText()).append("`\n");
+                sb.append("**模型**: `").append(node.get("model").asText()).append("`\n");
+            }
+
+            // 后台运行
+            if (node.has("run_in_background") && node.get("run_in_background").asBoolean()) {
+                sb.append("**模式**: 后台运行\n");
+            }
+
+            // 隔离模式
+            if (node.has("isolation")) {
+                sb.append("**隔离**: `").append(node.get("isolation").asText()).append("`\n");
+            }
+
+            // 任务详情（prompt）
+            if (node.has("prompt")) {
+                String prompt = node.get("prompt").asText();
+                // 截断过长的prompt，保留关键信息
+                if (prompt.length() > 500) {
+                    prompt = prompt.substring(0, 500) + "...";
+                }
+                sb.append("\n**任务详情**:\n```\n").append(prompt).append("\n```");
             }
 
             return sb.toString().strip();
@@ -360,19 +429,39 @@ public class MessageRouter {
                 if (node.isObject()) {
                     StringBuilder sb = new StringBuilder();
 
-                    // 结果摘要
-                    if (node.has("summary")) {
-                        sb.append("摘要: ").append(node.get("summary").asText()).append("\n");
-                    }
-
                     // 完成状态
                     if (node.has("status")) {
-                        sb.append("状态: ").append(node.get("status").asText()).append("\n");
+                        String status = node.get("status").asText();
+                        sb.append("**状态**: ").append(status.equals("success") ? "✅ 成功" : "❌ " + status).append("\n");
+                    }
+
+                    // 结果摘要
+                    if (node.has("summary")) {
+                        sb.append("**摘要**: ").append(node.get("summary").asText()).append("\n");
+                    }
+
+                    // 耗时
+                    if (node.has("duration_ms")) {
+                        long ms = node.get("duration_ms").asLong();
+                        sb.append("**耗时**: ").append(String.format("%.1f秒", ms / 1000.0)).append("\n");
+                    }
+
+                    // Token用量
+                    if (node.has("usage")) {
+                        com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
+                        int input = usage.has("input_tokens") ? usage.get("input_tokens").asInt() : 0;
+                        int output = usage.has("output_tokens") ? usage.get("output_tokens").asInt() : 0;
+                        sb.append("**Token**: 输入").append(input).append(" + 输出").append(output).append(" = ").append(input + output).append("\n");
                     }
 
                     // 结果内容
                     if (node.has("result")) {
-                        sb.append("结果:\n```\n").append(node.get("result").asText()).append("\n```");
+                        String content = node.get("result").asText();
+                        // 截断过长内容
+                        if (content.length() > 1000) {
+                            content = content.substring(0, 1000) + "\n...[内容已截断]";
+                        }
+                        sb.append("\n**结果**:\n```\n").append(content).append("\n```");
                     }
 
                     if (sb.length() > 0) {
@@ -384,7 +473,10 @@ public class MessageRouter {
             }
         }
 
-        // 非 JSON 或解析失败，直接返回
+        // 非 JSON 或解析失败，直接返回（截断过长内容）
+        if (result.length() > 1000) {
+            return result.substring(0, 1000) + "\n...[内容已截断]";
+        }
         return result;
     }
 

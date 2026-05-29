@@ -58,6 +58,10 @@ public class ClaudeApiService {
     private final Map<String, String> memoryDocuments = new ConcurrentHashMap<>();
     // 已触发过 /compact 的 sessionId（第二次触发阈值时才保存记忆文档）
     private final java.util.Set<String> compactedSessions = ConcurrentHashMap.newKeySet();
+    // 子任务开始时间（tool_use_id -> 开始时间），用于判断快速任务
+    private final Map<String, Long> taskStartTimes = new ConcurrentHashMap<>();
+    // 已发送开始通知的子任务（避免重复发送）
+    private final java.util.Set<String> startedTaskIds = ConcurrentHashMap.newKeySet();
 
     // 进程 ID 生成器
     private static final java.util.concurrent.atomic.AtomicLong processIdGenerator = new java.util.concurrent.atomic.AtomicLong(0);
@@ -705,7 +709,7 @@ public class ClaudeApiService {
                                         StringBuilder sb = new StringBuilder();
                                         sb.append("🤖 Agent 进行中").append(progress);
                                         if (!summary.isEmpty()) {
-                                            sb.append("\n摘要: ").append(summary);
+                                            sb.append("\n**摘要**: ").append(summary);
                                         }
                                         toolCallback.onSubtaskStatus(userId, sb.toString(), false, processIndex);
                                     }
@@ -723,10 +727,23 @@ public class ClaudeApiService {
                                             int total = node.get("total").asInt();
                                             progress = " [" + completed + "/" + total + "]";
                                         }
-                                        String statusText = isCompleted
-                                                ? "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary)
-                                                : "🔄 子任务 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
-                                        toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
+                                        // 检查是否是快速任务（<2秒），如果是，合并开始和完成通知
+                                        if (isCompleted && toolUseId != null) {
+                                            Long taskStartTime = taskStartTimes.remove(toolUseId);
+                                            boolean isQuickTask = taskStartTime != null && (System.currentTimeMillis() - taskStartTime) < 2000;
+                                            String statusText;
+                                            if (isQuickTask) {
+                                                // 快速任务：合并显示
+                                                statusText = "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                            } else {
+                                                // 普通任务：只显示完成
+                                                statusText = "✅ 子任务完成" + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                            }
+                                            toolCallback.onSubtaskStatus(userId, statusText, true, processIndex);
+                                        } else {
+                                            String statusText = "🔄 子任务 " + taskStatus + progress + (summary.isEmpty() ? "" : ": " + summary);
+                                            toolCallback.onSubtaskStatus(userId, statusText, isCompleted, processIndex);
+                                        }
                                     }
                                 }
                             } else if ("task_started".equals(subtype)) {
@@ -740,13 +757,29 @@ public class ClaudeApiService {
                                 } else if (!isAgent && !filterConfig.isShowSubtaskStatus()) {
                                     // 子任务通知被过滤，跳过
                                 } else {
+                                    // 记录开始时间，延迟发送开始通知
+                                    if (toolUseId != null) {
+                                        taskStartTimes.put(toolUseId, System.currentTimeMillis());
+                                    }
                                     String statusText;
                                     if (isAgent) {
                                         statusText = "🤖 创建Agent进程" + (description.isEmpty() ? "" : ": " + description);
+                                        toolCallback.onSubtaskStatus(userId, statusText, false, processIndex);
                                     } else {
                                         statusText = "📋 子任务开始" + (description.isEmpty() ? "" : ": " + description);
+                                        // 延迟发送开始通知，如果是快速任务会在完成时合并
+                                        final String finalStatusText = statusText;
+                                        final int finalProcessIndex = processIndex;
+                                        final String finalToolUseId = toolUseId;
+                                        CompletableFuture.delayedExecutor(2, java.util.concurrent.TimeUnit.SECONDS)
+                                                .execute(() -> {
+                                                    // 检查任务是否已完成（如果已完成则不发送开始通知）
+                                                    if (finalToolUseId != null && taskStartTimes.containsKey(finalToolUseId)) {
+                                                        taskStartTimes.remove(finalToolUseId);
+                                                        toolCallback.onSubtaskStatus(userId, finalStatusText, false, finalProcessIndex);
+                                                    }
+                                                });
                                     }
-                                    toolCallback.onSubtaskStatus(userId, statusText, false, processIndex);
                                 }
                             }
                         }
