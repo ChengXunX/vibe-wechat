@@ -2418,9 +2418,10 @@ public class ClaudeApiService {
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
-        int contextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
+        int actualContextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
+        int contextPercent = actualContextPercent;
 
-        // 检查是否有 /compact 后的显示覆盖
+        // 检查是否有 /compact 后的显示覆盖（仅影响显示，不影响压缩判断）
         if (sessionId != null && contextDisplayPercent.containsKey(sessionId)) {
             contextPercent = contextDisplayPercent.get(sessionId);
         }
@@ -2429,8 +2430,9 @@ public class ClaudeApiService {
         // 自动压缩检查：超过阈值时分两步处理
         // 第一次触发：调 Claude /compact 压缩 session
         // 第二次触发：保存记忆文档 + 清 session（进程保留）
+        // 注意：使用 actualContextPercent 判断，避免 displayPercent 导致永远不触发第二次压缩
         String compactionInfo = "";
-        if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
+        if (actualContextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
             if (!compactedSessions.contains(sessionId)) {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
