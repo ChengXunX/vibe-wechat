@@ -2413,10 +2413,10 @@ public class ClaudeApiService {
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
-        // 使用累积 inputTokens 作为上下文大小（反映真实的上下文累加逻辑）
-        int currentInputTokens = usage.getInputTokens();
-        int contextPercent = contextWindow > 0 ? Math.min(100, (int) (currentInputTokens * 100.0 / contextWindow)) : 0;
-        String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(currentInputTokens) + "/" + formatTokens(contextWindow) + ")";
+        // 使用当前会话的累计消耗（input + output）计算上下文占比
+        int currentTokens = usage.getTotalTokens();
+        int contextPercent = contextWindow > 0 ? Math.min(100, (int) (currentTokens * 100.0 / contextWindow)) : 0;
+        String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(currentTokens) + "/" + formatTokens(contextWindow) + ")";
 
         // 自动压缩检查：超过阈值时分两步处理
         // 第一次触发：调 Claude /compact 压缩 session，重置 token 为当前值的 50%
@@ -2427,8 +2427,8 @@ public class ClaudeApiService {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
                 boolean compacted = compactSession(sessionId);
-                // 重置 token 统计为当前值的 50%，模拟压缩后上下文缩小
-                int resetTokens = (int) (currentInputTokens * 0.5);
+                // 重置当前会话的 token 统计为当前值的 50%，模拟压缩后上下文缩小
+                int resetTokens = (int) (currentTokens * 0.5);
                 TokenUsage resetUsage = new TokenUsage();
                 resetUsage.add(resetTokens, 0);
                 tokenUsageMap.put(sessionId, resetUsage);
@@ -2472,8 +2472,8 @@ public class ClaudeApiService {
             }
         }
 
-        return String.format("---\n📊 本次: %s in / %s out | ⏱️ %s%s%s%s",
-                formatTokens(usage.inputTokens), formatTokens(usage.outputTokens), duration, sessionInfo, contextInfo, compactionInfo);
+        return String.format("---\n📊 本次会话: %s (in: %s, out: %s) | ⏱️ %s%s%s%s",
+                formatTokens(usage.getTotalTokens()), formatTokens(usage.getInputTokens()), formatTokens(usage.getOutputTokens()), duration, sessionInfo, contextInfo, compactionInfo);
     }
 
     private int parseContextWindowSize(String model) {
