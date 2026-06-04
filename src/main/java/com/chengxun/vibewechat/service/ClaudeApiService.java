@@ -41,8 +41,6 @@ public class ClaudeApiService {
     private final Map<String, TokenUsage> tokenUsageMap = new ConcurrentHashMap<>();
     // 累积 token 统计（userId -> 总用量，跨 session 不清除，含摘要生成消耗）
     private final Map<String, TokenUsage> cumulativeTokenUsage = new ConcurrentHashMap<>();
-    // 上下文显示比例（sessionId -> 压缩后的百分比，/compact 后覆盖显示）
-    private final Map<String, Integer> contextDisplayPercent = new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds = new ConcurrentHashMap<>();
     private final Map<String, List<String>> sessionHistory = new ConcurrentHashMap<>();
     // 每个进程独立的子任务队列（userId:processIndex -> Queue<subject>）
@@ -1819,14 +1817,17 @@ public class ClaudeApiService {
         private int inputTokens = 0;
         private int outputTokens = 0;
         private int totalTokens = 0;
+        private int lastInputTokens = 0;
 
         public synchronized void add(int input, int output) {
             this.inputTokens += input;
             this.outputTokens += output;
             this.totalTokens = inputTokens + outputTokens;
+            this.lastInputTokens = input;
         }
 
         public synchronized int getInputTokens() { return inputTokens; }
+        public synchronized int getLastInputTokens() { return lastInputTokens; }
         public synchronized int getOutputTokens() { return outputTokens; }
         public synchronized int getTotalTokens() { return totalTokens; }
     }
@@ -1838,14 +1839,12 @@ public class ClaudeApiService {
             sessions.forEach(tokenUsageMap::remove);
             sessions.forEach(memoryDocuments::remove);
             sessions.forEach(compactedSessions::remove);
-            sessions.forEach(contextDisplayPercent::remove);
         }
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
             memoryDocuments.remove(currentSession);
             compactedSessions.remove(currentSession);
-            contextDisplayPercent.remove(currentSession);
         }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
@@ -1863,7 +1862,6 @@ public class ClaudeApiService {
             tokenUsageMap.remove(currentSession);
             memoryDocuments.remove(currentSession);
             compactedSessions.remove(currentSession);
-            contextDisplayPercent.remove(currentSession);
             List<String> history = sessionHistory.get(userId);
             if (history != null) {
                 history.remove(currentSession);
@@ -1895,14 +1893,12 @@ public class ClaudeApiService {
             sessions.forEach(tokenUsageMap::remove);
             sessions.forEach(memoryDocuments::remove);
             sessions.forEach(compactedSessions::remove);
-            sessions.forEach(contextDisplayPercent::remove);
         }
         String currentSession = sessionIds.get(userId);
         if (currentSession != null) {
             tokenUsageMap.remove(currentSession);
             memoryDocuments.remove(currentSession);
             compactedSessions.remove(currentSession);
-            contextDisplayPercent.remove(currentSession);
         }
         sessionIds.remove(userId);
         sessionHistory.remove(userId);
@@ -1954,7 +1950,6 @@ public class ClaudeApiService {
             }
             memoryDocuments.remove(sessionId);
             compactedSessions.remove(sessionId);
-            contextDisplayPercent.remove(sessionId);
             return true;
         }
         return false;
@@ -2418,29 +2413,20 @@ public class ClaudeApiService {
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
-        int actualContextPercent = contextWindow > 0 ? Math.min(100, (int) (usage.inputTokens * 100.0 / contextWindow)) : 0;
-        int contextPercent = actualContextPercent;
-
-        // 检查是否有 /compact 后的显示覆盖（仅影响显示，不影响压缩判断）
-        if (sessionId != null && contextDisplayPercent.containsKey(sessionId)) {
-            contextPercent = contextDisplayPercent.get(sessionId);
-        }
-        String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(usage.inputTokens) + "/" + formatTokens(contextWindow) + ")";
+        // 使用 lastInputTokens（最近一次请求的实际上下文大小），而非累积总和
+        int currentInputTokens = usage.getLastInputTokens();
+        int contextPercent = contextWindow > 0 ? Math.min(100, (int) (currentInputTokens * 100.0 / contextWindow)) : 0;
+        String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(currentInputTokens) + "/" + formatTokens(contextWindow) + ")";
 
         // 自动压缩检查：超过阈值时分两步处理
         // 第一次触发：调 Claude /compact 压缩 session
         // 第二次触发：保存记忆文档 + 清 session（进程保留）
-        // 注意：使用 actualContextPercent 判断，避免 displayPercent 导致永远不触发第二次压缩
         String compactionInfo = "";
-        if (actualContextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
+        if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
             if (!compactedSessions.contains(sessionId)) {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
                 boolean compacted = compactSession(sessionId);
-                // /compact 后实际上下文约为原来的一半，覆盖显示比例（不删 token 统计）
-                if (compacted) {
-                    contextDisplayPercent.put(sessionId, contextPercent / 2);
-                }
                 compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "%）" +
                         (compacted ? "\n已执行 /compact 压缩会话上下文" : "") +
                         "\n下次消息将使用压缩后的会话";
@@ -2457,9 +2443,8 @@ public class ClaudeApiService {
                 String saveContent = (summary != null && !summary.isEmpty()) ? summary : responseContent;
                 String memoryPath = saveMemoryDocument(sessionId, workDir, saveContent);
 
-                // 仅清 session 和显示覆盖，保留所有进程和累积 token 统计
+                // 仅清 session，保留所有进程和累积 token 统计
                 sessionIds.remove(userId);
-                contextDisplayPercent.remove(sessionId);
                 List<ClaudeProcess> pool = processPools.get(userId);
                 if (pool != null) {
                     String groupId = getActiveGroupId(userId);
