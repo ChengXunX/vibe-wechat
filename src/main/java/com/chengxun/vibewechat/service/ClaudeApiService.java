@@ -2413,13 +2413,13 @@ public class ClaudeApiService {
         String sessionId = sessionIds.get(userId);
         String sessionInfo = sessionId != null ? "\n📋 Session: `" + sessionId + "`" : "";
         int contextWindow = parseContextWindowSize(claudeConfig.getModel());
-        // 使用 lastInputTokens（最近一次请求的实际上下文大小），而非累积总和
-        int currentInputTokens = usage.getLastInputTokens();
+        // 使用累积 inputTokens 作为上下文大小（反映真实的上下文累加逻辑）
+        int currentInputTokens = usage.getInputTokens();
         int contextPercent = contextWindow > 0 ? Math.min(100, (int) (currentInputTokens * 100.0 / contextWindow)) : 0;
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(currentInputTokens) + "/" + formatTokens(contextWindow) + ")";
 
         // 自动压缩检查：超过阈值时分两步处理
-        // 第一次触发：调 Claude /compact 压缩 session
+        // 第一次触发：调 Claude /compact 压缩 session，重置 token 为当前值的 50%
         // 第二次触发：保存记忆文档 + 清 session（进程保留）
         String compactionInfo = "";
         if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
@@ -2427,10 +2427,16 @@ public class ClaudeApiService {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
                 boolean compacted = compactSession(sessionId);
+                // 重置 token 统计为当前值的 50%，模拟压缩后上下文缩小
+                int resetTokens = (int) (currentInputTokens * 0.5);
+                TokenUsage resetUsage = new TokenUsage();
+                resetUsage.add(resetTokens, 0);
+                tokenUsageMap.put(sessionId, resetUsage);
                 compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "%）" +
                         (compacted ? "\n已执行 /compact 压缩会话上下文" : "") +
                         "\n下次消息将使用压缩后的会话";
-                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}", userId, contextPercent, sessionId);
+                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}, reset to {}%",
+                        userId, contextPercent, sessionId, (int)(resetTokens * 100.0 / contextWindow));
             } else {
                 // 第二次触发：保存记忆文档 + 清 session
                 String workDir = claudeConfig.getWorkDir();
@@ -2457,6 +2463,8 @@ public class ClaudeApiService {
                 }
 
                 compactedSessions.remove(sessionId);
+                // 更新显示：sessionId 已清除，下次消息将创建新会话
+                sessionInfo = "\n📋 Session: ~~`" + sessionId.substring(0, Math.min(12, sessionId.length())) + "...`~~ → 新会话待创建";
                 compactionInfo = "\n\n🔄 **上下文已二次压缩**（使用量 " + contextPercent + "%）" +
                         (memoryPath != null ? "\n📁 记忆文档已保存: `.vibe-memory/`" : "") +
                         "\n下次消息将自动读取记忆文档恢复上下文";
