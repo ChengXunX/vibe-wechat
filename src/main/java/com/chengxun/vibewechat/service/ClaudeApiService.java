@@ -676,8 +676,8 @@ public class ClaudeApiService {
                         }
 
                         // 解析 token 使用量
-                        // CLI 的 result.usage.input_tokens 是当前请求的完整上下文大小（含所有历史）
-                        // session 级别：用最新值替换（不累加），用于上下文百分比计算
+                        // CLI 的 result.usage.input_tokens 是本次请求新增的 token 数量
+                        // session 级别：累加每次请求的 token 数量，用于上下文百分比计算
                         // 累积统计：累加每次请求的实际消耗，用于 API 成本统计
                         com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
                         if (usage != null) {
@@ -686,7 +686,7 @@ public class ClaudeApiService {
                             String currentSessionId = cp.sessionId != null ? cp.sessionId : sessionIds.get(userId);
                             if (currentSessionId != null) {
                                 TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(currentSessionId, k -> new TokenUsage());
-                                tokenUsage.updateToLatest(inputTokens, outputTokens);
+                                tokenUsage.add(inputTokens, outputTokens);
                             }
                             // 累积统计（累加每次请求的消耗）
                             TokenUsage cumulative = cumulativeTokenUsage.computeIfAbsent(userId, k -> new TokenUsage());
@@ -1833,8 +1833,9 @@ public class ClaudeApiService {
         }
 
         /**
-         * 替换模式：用最新值替换（CLI 报告的 input_tokens 是当前请求的完整上下文大小）
-         * 用于 session 级别的上下文百分比计算
+         * 替换模式：用最新值替换
+         * 注意：CLI 返回的 input_tokens 是本次请求新增的 token 数量，不是完整上下文大小
+         * 因此应该使用 add() 方法累加，而不是 updateToLatest()
          */
         public synchronized void updateToLatest(int input, int output) {
             this.inputTokens = input;
@@ -2444,12 +2445,16 @@ public class ClaudeApiService {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
                 boolean compacted = compactSession(sessionId);
-                // 不重置 token 统计——下次请求的 CLI 报告值会反映 /compact 后的实际上下文
+                // 重置当前会话的 token 统计为当前值的 50%，模拟压缩后上下文缩小
+                int resetTokens = (int) (currentTokens * 0.5);
+                TokenUsage resetUsage = new TokenUsage();
+                resetUsage.add(resetTokens, 0);
+                tokenUsageMap.put(sessionId, resetUsage);
                 compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "%）" +
                         (compacted ? "\n已执行 /compact 压缩会话上下文" : "") +
                         "\n下次消息将使用压缩后的会话";
-                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}",
-                        userId, contextPercent, sessionId);
+                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}, reset to {}%",
+                        userId, contextPercent, sessionId, (int)(resetTokens * 100.0 / contextWindow));
             } else {
                 // 第二次触发：保存记忆文档 + 清 session
                 String workDir = claudeConfig.getWorkDir();
