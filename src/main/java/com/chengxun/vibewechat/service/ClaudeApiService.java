@@ -675,7 +675,10 @@ public class ClaudeApiService {
                             }
                         }
 
-                        // 解析 token 使用量（按 sessionId 统计，确保切换 session 后数据独立）
+                        // 解析 token 使用量
+                        // CLI 的 result.usage.input_tokens 是当前请求的完整上下文大小（含所有历史）
+                        // session 级别：用最新值替换（不累加），用于上下文百分比计算
+                        // 累积统计：累加每次请求的实际消耗，用于 API 成本统计
                         com.fasterxml.jackson.databind.JsonNode usage = node.get("usage");
                         if (usage != null) {
                             int inputTokens = usage.get("input_tokens").asInt();
@@ -683,9 +686,9 @@ public class ClaudeApiService {
                             String currentSessionId = cp.sessionId != null ? cp.sessionId : sessionIds.get(userId);
                             if (currentSessionId != null) {
                                 TokenUsage tokenUsage = tokenUsageMap.computeIfAbsent(currentSessionId, k -> new TokenUsage());
-                                tokenUsage.add(inputTokens, outputTokens);
+                                tokenUsage.updateToLatest(inputTokens, outputTokens);
                             }
-                            // 累积统计（不清除）
+                            // 累积统计（累加每次请求的消耗）
                             TokenUsage cumulative = cumulativeTokenUsage.computeIfAbsent(userId, k -> new TokenUsage());
                             cumulative.add(inputTokens, outputTokens);
                         }
@@ -1819,10 +1822,24 @@ public class ClaudeApiService {
         private int totalTokens = 0;
         private int lastInputTokens = 0;
 
+        /**
+         * 累加模式：用于累积 token 统计（跨请求累加，统计 API 总消耗）
+         */
         public synchronized void add(int input, int output) {
             this.inputTokens += input;
             this.outputTokens += output;
             this.totalTokens = inputTokens + outputTokens;
+            this.lastInputTokens = input;
+        }
+
+        /**
+         * 替换模式：用最新值替换（CLI 报告的 input_tokens 是当前请求的完整上下文大小）
+         * 用于 session 级别的上下文百分比计算
+         */
+        public synchronized void updateToLatest(int input, int output) {
+            this.inputTokens = input;
+            this.outputTokens = output;
+            this.totalTokens = input + output;
             this.lastInputTokens = input;
         }
 
@@ -2419,24 +2436,20 @@ public class ClaudeApiService {
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(currentTokens) + "/" + formatTokens(contextWindow) + ")";
 
         // 自动压缩检查：超过阈值时分两步处理
-        // 第一次触发：调 Claude /compact 压缩 session，重置 token 为当前值的 50%
-        // 第二次触发：保存记忆文档 + 清 session（进程保留）
+        // 第一次触发：调 Claude /compact 压缩 session 内部上下文
+        // 第二次触发：保存记忆文档 + 清 session（进程保留，排队任务通过记忆文档恢复上下文）
         String compactionInfo = "";
         if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
             if (!compactedSessions.contains(sessionId)) {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
                 boolean compacted = compactSession(sessionId);
-                // 重置当前会话的 token 统计为当前值的 50%，模拟压缩后上下文缩小
-                int resetTokens = (int) (currentTokens * 0.5);
-                TokenUsage resetUsage = new TokenUsage();
-                resetUsage.add(resetTokens, 0);
-                tokenUsageMap.put(sessionId, resetUsage);
+                // 不重置 token 统计——下次请求的 CLI 报告值会反映 /compact 后的实际上下文
                 compactionInfo = "\n\n🔄 **上下文已自动压缩**（使用量 " + contextPercent + "%）" +
                         (compacted ? "\n已执行 /compact 压缩会话上下文" : "") +
                         "\n下次消息将使用压缩后的会话";
-                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}, reset to {}%",
-                        userId, contextPercent, sessionId, (int)(resetTokens * 100.0 / contextWindow));
+                log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}",
+                        userId, contextPercent, sessionId);
             } else {
                 // 第二次触发：保存记忆文档 + 清 session
                 String workDir = claudeConfig.getWorkDir();
