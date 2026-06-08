@@ -179,6 +179,7 @@ public class IlInkConnectionHandler {
         int remaining = MESSAGE_LIMIT - currentCount - reservedQuota;
         // 开始提醒的消息序数 = max(1, 10 - busyProcesses)
         int warningThreshold = Math.max(1, MESSAGE_LIMIT - busyProcesses);
+        log.info("Quota check: userId={}, currentCount={}, busyProcesses={}, warningThreshold={}, remaining={}", userId, currentCount, busyProcesses, warningThreshold, remaining);
         String finalText = text;
         if (!isUnlimitedType && currentCount >= warningThreshold) {
             String warning = text + "\n\n⚠️ 消息即将达上限（已用 " + currentCount + " + 预留 " + reservedQuota + "）\n后续工具通知将屏蔽，发送 v-refresh 可刷新配额";

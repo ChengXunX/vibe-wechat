@@ -423,6 +423,8 @@ public class ClaudeApiService {
                     k -> new LinkedBlockingQueue<>());
             queue.offer(new PendingRequest(message, future, groupId));
             log.info("Request queued for user: {}, group: {}, queue size: {}", userId, groupId, queue.size());
+            // 入队后立即尝试处理（修复竞态：任务刚好在入队前完成导致队列未被消费）
+            processNextInQueue(userId);
             return future;
         }
 
@@ -466,6 +468,8 @@ public class ClaudeApiService {
                     k -> new LinkedBlockingQueue<>());
             queue.offer(new PendingRequest(message, future, groupId));
             log.info("Request queued for user: {}, group: {}, queue size: {}", userId, groupId, queue.size());
+            // 入队后立即尝试处理（修复竞态：任务刚好在入队前完成导致队列未被消费）
+            processNextInQueue(userId);
             return new SendResult(future, -1);
         }
 
@@ -691,6 +695,7 @@ public class ClaudeApiService {
                             // 累积统计（累加每次请求的消耗）
                             TokenUsage cumulative = cumulativeTokenUsage.computeIfAbsent(userId, k -> new TokenUsage());
                             cumulative.add(inputTokens, outputTokens);
+                            log.info("Token usage for user {}: input={}, output={}, session_total_input={}, cumulative_input={}", userId, inputTokens, outputTokens, currentSessionId != null ? tokenUsageMap.get(currentSessionId).getInputTokens() : 0, cumulative.getInputTokens());
                         }
 
                         // 收到 result，退出循环
@@ -849,18 +854,26 @@ public class ClaudeApiService {
         PendingRequest peeked = queue.peek();
         if (peeked == null) return;
 
-        // 若该进程组有延迟重启标记，不处理（等重启完成后再释放）
+        // 若该进程组有延迟重启标记，尝试执行重启
         String groupId = peeked.groupId;
         String restartKey = userId + ":" + groupId;
-        if (pendingRestart.containsKey(restartKey)) return;
+        if (pendingRestart.containsKey(restartKey)) {
+            log.info("processNextInQueue: group {} has pending restart, checking...", groupId);
+            checkAndApplyDeferredRestart(userId);
+            return;
+        }
 
         // 检查该进程组是否有空闲 Worker
         List<ClaudeProcess> pool = processPools.get(userId);
-        if (pool == null) return;
+        if (pool == null) {
+            log.info("processNextInQueue: no pool for user {}", userId);
+            return;
+        }
 
         boolean hasIdleWorker = pool.stream()
                 .anyMatch(p -> groupId.equals(p.groupId) && !p.busy);
         if (!hasIdleWorker) {
+            log.info("processNextInQueue: no idle worker for group {}, pool size={}, busy={}", groupId, pool.size(), pool.stream().filter(p -> p.busy).count());
             return;
         }
 
@@ -868,6 +881,7 @@ public class ClaudeApiService {
         PendingRequest next = queue.poll();
         if (next == null) return;
 
+        log.info("processNextInQueue: processing queued request for user {}, group {}", userId, groupId);
         CompletableFuture<String> resultFuture = sendMessageAsync(userId, next.message);
         resultFuture.whenComplete((result, ex) -> {
             if (ex != null) {
@@ -1077,6 +1091,7 @@ public class ClaudeApiService {
         if (pool.isEmpty()) {
             processPools.remove(userId);
             currentProcessIndex.remove(userId);
+            cancelPendingRequests(userId);
         }
         processNextInQueue(userId);
     }
@@ -1111,10 +1126,41 @@ public class ClaudeApiService {
         if (pool.isEmpty()) {
             processPools.remove(userId);
             currentProcessIndex.remove(userId);
+            cancelPendingRequests(userId);
         }
 
         processNextInQueue(userId);
         return "已停止当前进程的任务";
+    }
+
+    /**
+     * 停止当前任务但保留 Worker，排队的消息会立即被处理
+     * 只杀 CLI 进程，Worker 保持在池中（busy 状态由 processMessage 的 finally 清除）
+     */
+    public String stopCurrentProcessKeepWorker(String userId) {
+        List<ClaudeProcess> pool = processPools.get(userId);
+        if (pool == null || pool.isEmpty()) {
+            return "无活跃进程";
+        }
+
+        int activeIndex = currentProcessIndex.getOrDefault(userId, 0);
+        if (activeIndex < 0 || activeIndex >= pool.size()) {
+            activeIndex = 0;
+        }
+
+        ClaudeProcess target = pool.get(activeIndex);
+        if (!target.busy) {
+            return "当前进程没有正在运行的任务";
+        }
+
+        // 只杀 CLI 进程，保留 Worker 在池中
+        // processMessage 的 readLine() 会抛异常 → catch → finally: busy=false → processNextInQueue
+        target.destroyCliProcess();
+
+        BlockingQueue<PendingRequest> queue = requestQueues.get(userId);
+        int queueSize = queue != null ? queue.size() : 0;
+        String queueInfo = queueSize > 0 ? "\n⏳ 排队任务: " + queueSize + " 个，即将处理" : "";
+        return "已停止当前任务（Worker 保留）" + queueInfo;
     }
 
     /**
@@ -1148,6 +1194,7 @@ public class ClaudeApiService {
         if (pool.isEmpty()) {
             processPools.remove(userId);
             currentProcessIndex.remove(userId);
+            cancelPendingRequests(userId);
         }
 
         String type;
@@ -2169,14 +2216,14 @@ public class ClaudeApiService {
 
     /**
      * 调用 Claude CLI 生成上下文摘要（阻塞调用）
-     * 独立进程，不复用 Worker，仅用于压缩时快速生成摘要
+     * 独立进程，使用 --resume 恢复 session 获取完整上下文后生成摘要
      * 使用 json 输出格式以提取 token 用量
-     * @param responseContent 原始响应内容
+     * @param sessionId 会话ID（用于恢复 session 获取完整上下文）
      * @param workDir 工作目录
      * @param userId 用户ID（用于累积 token 统计）
      * @return 摘要文本，失败返回 null
      */
-    private String generateContextSummary(String responseContent, String workDir, String userId) {
+    private String generateContextSummary(String sessionId, String workDir, String userId) {
         String installPath = claudeConfig.getInstallPath();
         if (installPath == null || installPath.isEmpty()) {
             return null;
@@ -2191,20 +2238,25 @@ public class ClaudeApiService {
             command.add("--output-format");
             command.add("json");
 
+            // 使用 --resume 恢复 session 获取完整上下文
+            if (sessionId != null) {
+                command.add("--resume");
+                command.add(sessionId);
+            }
+
             String model = claudeConfig.getModel();
             if (model != null && !model.isEmpty()) {
                 command.add("--model");
                 command.add(model);
             }
 
-            // 限制输入长度，避免摘要请求本身消耗过多 token
-            String truncatedContent = responseContent.length() > 8000
-                    ? responseContent.substring(0, 8000) + "\n...[内容已截断]"
-                    : responseContent;
-
-            String prompt = "请将以下对话内容压缩为结构化的上下文摘要文档，用于后续会话恢复上下文。" +
-                    "要求：保留关键决策、完成的工作、当前状态、待办事项。用中文，简洁精炼。\n\n" +
-                    truncatedContent;
+            String prompt = "请将当前会话的完整上下文压缩为结构化的摘要文档，用于后续会话恢复上下文。" +
+                    "要求：\n" +
+                    "1. 保留关键决策和完成的工作\n" +
+                    "2. 记录当前状态和待办事项\n" +
+                    "3. 保留重要的技术细节和配置信息\n" +
+                    "4. 用中文，简洁精炼但信息完整\n\n" +
+                    "请生成上下文摘要：";
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.redirectErrorStream(false);
@@ -2225,7 +2277,7 @@ public class ClaudeApiService {
                 }
             }
 
-            boolean finished = process.waitFor(30, TimeUnit.SECONDS);
+            boolean finished = process.waitFor(60, TimeUnit.SECONDS);
             if (!finished) {
                 process.destroyForcibly();
                 log.warn("Context summary generation timed out");
@@ -2463,7 +2515,8 @@ public class ClaudeApiService {
                 }
 
                 // 生成摘要并保存（token 消耗已计入 cumulativeTokenUsage）
-                String summary = generateContextSummary(responseContent, workDir, userId);
+                // 使用 sessionId 恢复 session 获取完整上下文后生成摘要
+                String summary = generateContextSummary(sessionId, workDir, userId);
                 String saveContent = (summary != null && !summary.isEmpty()) ? summary : responseContent;
                 String memoryPath = saveMemoryDocument(sessionId, workDir, saveContent);
 

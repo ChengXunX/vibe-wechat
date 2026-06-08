@@ -1052,6 +1052,7 @@ public class MessageRouter {
                 | `v-stop` | 停止当前进程的任务 |
                 | `v-stop <序号>` | 停止指定进程的任务 |
                 | `v-stop all` | 停止全部进程的任务 |
+                | `v-stop keep` | 停止当前任务，保留 Worker 并立即处理排队消息 |
                 | `v-maxproc <数量>` | 设置最大进程数 (1-CPU×2) |
                 | `v-idle <秒>` | 设置空闲超时（默认24小时） |
 
@@ -1483,9 +1484,10 @@ public class MessageRouter {
     }
 
     private void handleStopCommand(String userId, String[] parts, String contextToken) {
-        // v-stop [all|序号]
-        // 默认停止当前进程的任务
+        // v-stop [all|keep|序号]
+        // 默认停止当前进程的任务（销毁 Worker）
         // all: 停止全部任务
+        // keep: 停止当前任务但保留 Worker，排队的消息会立即被处理
         // 序号: 停止指定进程的任务
 
         if (parts.length >= 2) {
@@ -1499,6 +1501,10 @@ public class MessageRouter {
                 }
                 claudeApiService.forceStopAll(userId);
                 ilinkService.sendText(userId, "已强制停止全部 " + busyCount + " 个忙碌进程", contextToken);
+            } else if ("keep".equals(arg)) {
+                // 停止当前任务但保留 Worker
+                String result = claudeApiService.stopCurrentProcessKeepWorker(userId);
+                ilinkService.sendText(userId, result, contextToken);
             } else {
                 // 停止指定进程的任务
                 try {
@@ -1506,7 +1512,7 @@ public class MessageRouter {
                     String result = claudeApiService.forceStopProcess(userId, index);
                     ilinkService.sendText(userId, result, contextToken);
                 } catch (NumberFormatException e) {
-                    ilinkService.sendText(userId, "用法: v-stop [all|序号]\n- 无参数: 停止当前进程\n- all: 停止全部\n- 序号: 停止指定进程", contextToken);
+                    ilinkService.sendText(userId, "用法: v-stop [all|keep|序号]\n- 无参数: 停止当前进程\n- all: 停止全部\n- keep: 停止当前任务，保留 Worker 并处理排队消息\n- 序号: 停止指定进程", contextToken);
                 }
             }
         } else {
