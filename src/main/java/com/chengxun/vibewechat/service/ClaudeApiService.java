@@ -2489,11 +2489,11 @@ public class ClaudeApiService {
         String contextInfo = "\n🧠 上下文: " + contextPercent + "% (" + formatTokens(currentTokens) + "/" + formatTokens(contextWindow) + ")";
 
         // 自动压缩检查：超过阈值时分两步处理
-        // 第一次触发：调 Claude /compact 压缩 session 内部上下文
-        // 第二次触发：保存记忆文档 + 清 session（进程保留，排队任务通过记忆文档恢复上下文）
+        // 第一次触发（90%）：调 Claude /compact 压缩 session 内部上下文
+        // 第二次触发（95%）：保存记忆文档 + 清 session（进程保留，排队任务通过记忆文档恢复上下文）
         String compactionInfo = "";
-        if (contextPercent >= claudeConfig.getContextCompactionThreshold() && sessionId != null) {
-            if (!compactedSessions.contains(sessionId)) {
+        if (sessionId != null) {
+            if (!compactedSessions.contains(sessionId) && contextPercent >= claudeConfig.getContextCompactThreshold()) {
                 // 第一次触发：调用 Claude /compact 压缩 session 内部上下文
                 compactedSessions.add(sessionId);
                 boolean compacted = compactSession(sessionId);
@@ -2507,7 +2507,7 @@ public class ClaudeApiService {
                         "\n下次消息将使用压缩后的会话";
                 log.info("Auto compaction (step 1: /compact) for user: {}, context: {}%, session: {}, reset to {}%",
                         userId, contextPercent, sessionId, (int)(resetTokens * 100.0 / contextWindow));
-            } else {
+            } else if (compactedSessions.contains(sessionId) && contextPercent >= claudeConfig.getContextMemoryThreshold()) {
                 // 第二次触发：保存记忆文档 + 清 session
                 String workDir = claudeConfig.getWorkDir();
                 if (workDir == null || workDir.isEmpty()) {

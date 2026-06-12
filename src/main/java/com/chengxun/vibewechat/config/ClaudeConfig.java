@@ -22,7 +22,8 @@ public class ClaudeConfig {
     private long processStartTimeoutMs = 30000;    // 启动超时30秒
 
     // 自动压缩配置
-    private int contextCompactionThreshold = 80;   // 上下文使用超过80%时自动压缩
+    private int contextCompactThreshold = 90;      // 第一次压缩（/compact）阈值
+    private int contextMemoryThreshold = 95;       // 第二次压缩（记忆文档）阈值
 
     public void setMaxProcessesPerUser(int max) {
         int maxAllowed = Runtime.getRuntime().availableProcessors() * 2;
